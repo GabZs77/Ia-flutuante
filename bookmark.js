@@ -78,7 +78,6 @@
         }
     };
 
-
     const STATE = {
         isAnalyzing: false,
         images: [],
@@ -151,7 +150,7 @@
                                  document.getElementById('hck-toggle-btn')?.style.setProperty('border-color', '#38383A');
                              }
                          }, 30000);
-                     }
+                    }
                     delay = CONFIG.API_RETRY_DELAY_BASE * CONFIG.API_RATE_LIMIT_DELAY_MULTIPLIER * (attempt + 1);
                     logMessage('WARN', `[${modelName}] Rate limit. Aplicando backoff maior: ${delay}ms`);
                 } else {
@@ -227,7 +226,10 @@
             try {
                 if (el.tagName === 'IMG' && el.src) src = el.src;
                 else if (el.dataset.image) src = el.dataset.image;
-                else if (el.style.backgroundImage) { const m = el.style.backgroundImage.match(/url\("?(.+?)"?\)/); if (m && m[1]) src = m[1]; }
+                else if (el.style.backgroundImage) { 
+                    const m = el.style.backgroundImage.match(/url\("?(.+?)"?\)/); 
+                    if (m && m[1]) src = m[1]; 
+                }
 
                 if (src) {
                     const absUrl = new URL(src, window.location.href).toString();
@@ -235,15 +237,15 @@
                     if (IMAGE_FILTERS.verify(absUrl)) {
                         urls.add(absUrl);
                     }
-                    // O log de bloqueio/permissão já acontece dentro do verify
                 }
-            } catch (e) { logMessage('WARN', `Erro ao processar URL de imagem: ${src || 'desconhecido'}. ${e.message}`); }
+            } catch (e) { 
+                logMessage('WARN', `Erro ao processar URL de imagem: ${src || 'desconhecido'}. ${e.message}`); 
+            }
         });
         STATE.images = Array.from(urls).slice(0, 10);
         logMessage('INFO', `Extração concluída. ${STATE.images.length} imagens válidas e permitidas encontradas.`);
         return STATE.images;
     }
-
 
     async function queryGemini(modelInfo, prompt) {
         const { id: modelId, name: modelName } = modelInfo;
@@ -337,7 +339,7 @@
         return null;
     }
 
-     function determineConsensus(results) {
+    function determineConsensus(results) {
         logMessage('INFO', 'Determinando consenso...');
         const validAnswers = {};
         let errors = 0;
@@ -414,18 +416,21 @@
         }
     }
 
-     async function buildPrompt(question, imageUrls) {
+    async function buildPrompt(question, imageUrls) {
         logMessage('INFO', `Construindo prompt (${imageUrls.length} imagens detectadas)...`);
         const imageParts = [];
         let imageFetchErrors = 0;
-        const imageFetchPromises = imageUrls.map(async (url) => {
+        const maxImages = 5; // Limitar o número de imagens para evitar problemas com o tamanho da requisição
+        const limitedImageUrls = imageUrls.slice(0, maxImages);
+        
+        const imageFetchPromises = limitedImageUrls.map(async (url) => {
             try {
                 const base64 = await fetchImageAsBase64(url);
                 let mime = 'image/jpeg';
                 if (/\.png$/i.test(url)) mime = 'image/png';
                 else if (/\.webp$/i.test(url)) mime = 'image/webp';
                 else if (/\.gif$/i.test(url)) mime = 'image/gif';
-                 else if (/\.jpe?g$/i.test(url)) mime = 'image/jpeg';
+                else if (/\.jpe?g$/i.test(url)) mime = 'image/jpeg';
                 imageParts.push({ inlineData: { mimeType: mime, data: base64 } });
             } catch (e) {
                 imageFetchErrors++;
@@ -472,40 +477,283 @@ ${imageParts.length > 0 ? '\nIMAGENS (Analise cuidadosamente):\n' : (imageFetchE
     function setupUI() {
         logMessage('INFO','Configurando UI (iOS Refined Bookmarklet)...');
         try {
-            const fontLink = document.createElement('link'); fontLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap'; fontLink.rel = 'stylesheet'; document.head.appendChild(fontLink);
+            const fontLink = document.createElement('link'); 
+            fontLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap'; 
+            fontLink.rel = 'stylesheet'; 
+            document.head.appendChild(fontLink);
         } catch (e) {
             logMessage('WARN', 'Falha ao injetar Google Font (CSP?). Usando fontes do sistema.');
         }
-        const estilo = { cores: { fundo: '#1C1C1E', fundoSecundario: '#2C2C2E', fundoTerciario: '#3A3A3C', texto: '#F5F5F7', textoSecundario: '#8A8A8E', accent: '#FFFFFF', accentBg: '#007AFF', secondaryAccent: '#E5E5EA', secondaryAccentBg: '#3A3A3C', erro: '#FF453A', sucesso: '#32D74B', warn: '#FFD60A', info: '#0A84FF', logDebug: '#636366', borda: '#38383A', notificationBg: 'rgba(44, 44, 46, 0.85)', copyBtnBg: '#555555' }, sombras: { menu: '0 10px 35px rgba(0, 0, 0, 0.3)', botao: '0 2px 4px rgba(0, 0, 0, 0.2)', notification: '0 5px 20px rgba(0, 0, 0, 0.3)' }, radius: '14px', radiusSmall: '8px' };
-        const getResponsiveSize = () => ({ menuWidth: (window.innerWidth < 768 ? '200px' : '220px'), fontSize: (window.innerWidth < 768 ? '13px' : '14px'), buttonPadding: '9px 10px', textareaHeight: '45px', titleSize: '16px' });
-        const container = document.createElement('div'); container.id = 'hck-ui-bookmarklet';
-        container.style.cssText = ` position: fixed; bottom: 12px; right: 12px; z-index: 10000; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; line-height: 1.4; `;
-        const toggleBtn = document.createElement('button'); toggleBtn.id = 'hck-toggle-btn'; toggleBtn.textContent = 'HCK'; toggleBtn.style.cssText = ` background: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; padding: 8px 18px; border: 1px solid ${estilo.cores.borda}; border-radius: 22px; cursor: pointer; font-weight: 600; font-size: 15px; box-shadow: ${estilo.sombras.botao}; display: block; transition: all 0.35s ease-out; width: auto; min-width: 70px; text-align: center; &:hover { background: ${estilo.cores.fundoTerciario}; color: ${estilo.cores.texto}; } `;
+        
+        const estilo = { 
+            cores: { 
+                fundo: '#1C1C1E', 
+                fundoSecundario: '#2C2C2E', 
+                fundoTerciario: '#3A3A3C', 
+                texto: '#F5F5F7', 
+                textoSecundario: '#8A8A8E', 
+                accent: '#FFFFFF', 
+                accentBg: '#007AFF', 
+                secondaryAccent: '#E5E5EA', 
+                secondaryAccentBg: '#3A3A3C', 
+                erro: '#FF453A', 
+                sucesso: '#32D74B', 
+                warn: '#FFD60A', 
+                info: '#0A84FF', 
+                logDebug: '#636366', 
+                borda: '#38383A', 
+                notificationBg: 'rgba(44, 44, 46, 0.85)', 
+                copyBtnBg: '#555555' 
+            }, 
+            sombras: { 
+                menu: '0 10px 35px rgba(0, 0, 0, 0.3)', 
+                botao: '0 2px 4px rgba(0, 0, 0, 0.2)', 
+                notification: '0 5px 20px rgba(0, 0, 0, 0.3)' 
+            }, 
+            radius: '14px', 
+            radiusSmall: '8px' 
+        };
+        
+        const getResponsiveSize = () => ({ 
+            menuWidth: (window.innerWidth < 768 ? '200px' : '220px'), 
+            fontSize: (window.innerWidth < 768 ? '13px' : '14px'), 
+            buttonPadding: '9px 10px', 
+            textareaHeight: '45px', 
+            titleSize: '16px' 
+        });
+        
+        const container = document.createElement('div'); 
+        container.id = 'hck-ui-bookmarklet';
+        container.style.cssText = ` 
+            position: fixed; 
+            bottom: 12px; 
+            right: 12px; 
+            z-index: 10000; 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; 
+            line-height: 1.4; 
+        `;
+        
+        const toggleBtn = document.createElement('button'); 
+        toggleBtn.id = 'hck-toggle-btn'; 
+        toggleBtn.textContent = 'HCK'; 
+        toggleBtn.style.cssText = ` 
+            background: ${estilo.cores.fundoSecundario}; 
+            color: ${estilo.cores.textoSecundario}; 
+            padding: 8px 18px; 
+            border: 1px solid ${estilo.cores.borda}; 
+            border-radius: 22px; 
+            cursor: pointer; 
+            font-weight: 600; 
+            font-size: 15px; 
+            box-shadow: ${estilo.sombras.botao}; 
+            display: block; 
+            transition: all 0.35s ease-out; 
+            width: auto; 
+            min-width: 70px; 
+            text-align: center; 
+        `;
+        
         const sizes = getResponsiveSize();
-        const menu = document.createElement('div'); menu.id = 'hck-menu'; menu.style.cssText = ` background: ${estilo.cores.fundo}; width: ${sizes.menuWidth}; padding: 10px; border-radius: ${estilo.radius}; box-shadow: ${estilo.sombras.menu}; display: none; flex-direction: column; gap: 8px; border: 1px solid ${estilo.cores.borda}; opacity: 0; transform: translateY(15px) scale(0.95); transition: opacity 0.35s ease-out, transform 0.35s ease-out; position: relative; margin-bottom: 8px; max-height: 75vh; overflow-y: auto; scrollbar-width: none; &::-webkit-scrollbar { display: none; } `;
-        const header = document.createElement('div'); header.style.cssText = `display: flex; align-items: center; justify-content: center; position: relative; width: 100%; margin-bottom: 4px;`;
-        // --- TÍTULO DO MENU ATUALIZADO ---
-        const title = document.createElement('div'); title.textContent = 'HCK'; title.style.cssText = ` font-size: ${sizes.titleSize}; font-weight: 600; text-align: center; flex-grow: 1; color: ${estilo.cores.texto}; `;
-        const closeBtn = document.createElement('button'); closeBtn.innerHTML = '×'; closeBtn.setAttribute('aria-label', 'Fechar Menu'); closeBtn.style.cssText = ` position: absolute; top: -4px; right: -4px; background: ${estilo.cores.fundoSecundario}; border: none; color: ${estilo.cores.textoSecundario}; font-size: 18px; font-weight: 600; cursor: pointer; padding: 0; line-height: 1; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; &:hover { background-color: ${estilo.cores.fundoTerciario}; color: ${estilo.cores.texto}; } `;
+        const menu = document.createElement('div'); 
+        menu.id = 'hck-menu'; 
+        menu.style.cssText = ` 
+            background: ${estilo.cores.fundo}; 
+            width: ${sizes.menuWidth}; 
+            padding: 10px; 
+            border-radius: ${estilo.radius}; 
+            box-shadow: ${estilo.sombras.menu}; 
+            display: none; 
+            flex-direction: column; 
+            gap: 8px; 
+            border: 1px solid ${estilo.cores.borda}; 
+            opacity: 0; 
+            transform: translateY(15px) scale(0.95); 
+            transition: opacity 0.35s ease-out, transform 0.35s ease-out; 
+            position: relative; 
+            margin-bottom: 8px; 
+            max-height: 75vh; 
+            overflow-y: auto; 
+            scrollbar-width: none; 
+        `;
+        
+        menu.style.setProperty('&::-webkit-scrollbar', 'display: none;');
+        
+        const header = document.createElement('div'); 
+        header.style.cssText = `display: flex; align-items: center; justify-content: center; position: relative; width: 100%; margin-bottom: 4px;`;
+        
+        const title = document.createElement('div'); 
+        title.textContent = 'HCK'; 
+        title.style.cssText = ` 
+            font-size: ${sizes.titleSize}; 
+            font-weight: 600; 
+            text-align: center; 
+            flex-grow: 1; 
+            color: ${estilo.cores.texto}; 
+        `;
+        
+        const closeBtn = document.createElement('button'); 
+        closeBtn.innerHTML = '×'; 
+        closeBtn.setAttribute('aria-label', 'Fechar Menu'); 
+        closeBtn.style.cssText = ` 
+            position: absolute; 
+            top: -4px; 
+            right: -4px; 
+            background: ${estilo.cores.fundoSecundario}; 
+            border: none; 
+            color: ${estilo.cores.textoSecundario}; 
+            font-size: 18px; 
+            font-weight: 600; 
+            cursor: pointer; 
+            padding: 0; 
+            line-height: 1; 
+            border-radius: 50%; 
+            width: 22px; 
+            height: 22px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            transition: all 0.2s ease; 
+        `;
+        
+        closeBtn.addEventListener('mouseenter', () => {
+            closeBtn.style.backgroundColor = estilo.cores.fundoTerciario;
+            closeBtn.style.color = estilo.cores.texto;
+        });
+        
+        closeBtn.addEventListener('mouseleave', () => {
+            closeBtn.style.backgroundColor = estilo.cores.fundoSecundario;
+            closeBtn.style.color = estilo.cores.textoSecundario;
+        });
+        
         header.append(title, closeBtn);
-        const input = document.createElement('textarea'); input.id = 'hck-question-input'; input.placeholder = 'Cole a questão aqui...'; input.setAttribute('rows', '2'); input.style.cssText = ` width: 100%; min-height: ${sizes.textareaHeight}; padding: 8px; margin-bottom: 0; border: 1px solid ${estilo.cores.borda}; border-radius: ${estilo.radiusSmall}; resize: vertical; font-size: ${sizes.fontSize}; font-family: inherit; box-sizing: border-box; background: ${estilo.cores.fundoTerciario}; color: ${estilo.cores.texto}; transition: border-color 0.2s ease, box-shadow 0.2s ease; &::placeholder {color: ${estilo.cores.textoSecundario};} &:focus { outline: none; border-color: ${estilo.cores.accentBg}; box-shadow: 0 0 0 1px ${estilo.cores.accentBg}80; } `;
-        const imagesContainer = document.createElement('div'); imagesContainer.id = 'hck-images-container'; imagesContainer.style.cssText = ` max-height: 60px; overflow-y: auto; margin-bottom: 0; font-size: calc(${sizes.fontSize} - 2px); border: 1px solid ${estilo.cores.borda}; border-radius: ${estilo.radiusSmall}; padding: 6px 8px; background: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; scrollbar-width: none; &::-webkit-scrollbar { display: none; }`; imagesContainer.innerHTML = `<div style="text-align: center; padding: 1px; font-size: 0.9em;">Nenhuma imagem detectada</div>`;
-        const buttonBaseStyle = ` width: 100%; padding: ${sizes.buttonPadding}; border: none; border-radius: ${estilo.radiusSmall}; cursor: pointer; font-size: ${sizes.fontSize}; font-weight: 500; margin-bottom: 0; display: flex; align-items: center; justify-content: center; gap: 6px; transition: opacity 0.2s ease, background-color 0.2s ease, color 0.2s ease; `;
-        const buttonPrimaryStyle = ` ${buttonBaseStyle} background: ${estilo.cores.accentBg}; color: ${estilo.cores.accent}; &:hover { opacity: 0.85; } &:disabled { background-color: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; opacity: 0.6; cursor: not-allowed; } `;
-        const buttonSecondaryStyle = ` ${buttonBaseStyle} background: ${estilo.cores.secondaryAccentBg}; color: ${estilo.cores.secondaryAccent}; border: 1px solid ${estilo.cores.borda}; &:hover { background: ${estilo.cores.fundoTerciario}; opacity: 1; } `;
-        const updateImagesBtn = document.createElement('button'); updateImagesBtn.textContent = `Atualizar Imagens`; updateImagesBtn.style.cssText = buttonSecondaryStyle;
-        const analyzeBtn = document.createElement('button'); analyzeBtn.id = 'hck-analyze-btn'; analyzeBtn.textContent = `Analisar Questão`; analyzeBtn.style.cssText = buttonPrimaryStyle;
-        const clearBtn = document.createElement('button'); clearBtn.textContent = `Limpar Tudo`; clearBtn.style.cssText = buttonSecondaryStyle;
-        const logsBtn = document.createElement('button'); logsBtn.textContent = `Ver Logs`; logsBtn.style.cssText = buttonSecondaryStyle;
-        // --- FORMATAÇÃO DOS CRÉDITOS ATUALIZADA ---
+        
+        const input = document.createElement('textarea'); 
+        input.id = 'hck-question-input'; 
+        input.placeholder = 'Cole a questão aqui...'; 
+        input.setAttribute('rows', '2'); 
+        input.style.cssText = ` 
+            width: 100%; 
+            min-height: ${sizes.textareaHeight}; 
+            padding: 8px; 
+            margin-bottom: 0; 
+            border: 1px solid ${estilo.cores.borda}; 
+            border-radius: ${estilo.radiusSmall}; 
+            resize: vertical; 
+            font-size: ${sizes.fontSize}; 
+            font-family: inherit; 
+            box-sizing: border-box; 
+            background: ${estilo.cores.fundoTerciario}; 
+            color: ${estilo.cores.texto}; 
+            transition: border-color 0.2s ease, box-shadow 0.2s ease; 
+        `;
+        
+        input.addEventListener('focus', () => {
+            input.style.outline = 'none';
+            input.style.borderColor = estilo.cores.accentBg;
+            input.style.boxShadow = `0 0 0 1px ${estilo.cores.accentBg}80`;
+        });
+        
+        input.addEventListener('blur', () => {
+            input.style.borderColor = estilo.cores.borda;
+            input.style.boxShadow = 'none';
+        });
+        
+        const imagesContainer = document.createElement('div'); 
+        imagesContainer.id = 'hck-images-container'; 
+        imagesContainer.style.cssText = ` 
+            max-height: 60px; 
+            overflow-y: auto; 
+            margin-bottom: 0; 
+            font-size: calc(${sizes.fontSize} - 2px); 
+            border: 1px solid ${estilo.cores.borda}; 
+            border-radius: ${estilo.radiusSmall}; 
+            padding: 6px 8px; 
+            background: ${estilo.cores.fundoSecundario}; 
+            color: ${estilo.cores.textoSecundario}; 
+            scrollbar-width: none; 
+        `;
+        
+        imagesContainer.style.setProperty('&::-webkit-scrollbar', 'display: none;');
+        imagesContainer.innerHTML = `<div style="text-align: center; padding: 1px; font-size: 0.9em;">Nenhuma imagem detectada</div>`;
+        
+        const buttonBaseStyle = ` 
+            width: 100%; 
+            padding: ${sizes.buttonPadding}; 
+            border: none; 
+            border-radius: ${estilo.radiusSmall}; 
+            cursor: pointer; 
+            font-size: ${sizes.fontSize}; 
+            font-weight: 500; 
+            margin-bottom: 0; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 6px; 
+            transition: opacity 0.2s ease, background-color 0.2s ease, color 0.2s ease; 
+        `;
+        
+        const buttonPrimaryStyle = ` ${buttonBaseStyle} 
+            background: ${estilo.cores.accentBg}; 
+            color: ${estilo.cores.accent}; 
+        `;
+        
+        const buttonSecondaryStyle = ` ${buttonBaseStyle} 
+            background: ${estilo.cores.secondaryAccentBg}; 
+            color: ${estilo.cores.secondaryAccent}; 
+            border: 1px solid ${estilo.cores.borda}; 
+        `;
+        
+        const updateImagesBtn = document.createElement('button'); 
+        updateImagesBtn.textContent = `Atualizar Imagens`; 
+        updateImagesBtn.style.cssText = buttonSecondaryStyle;
+        
+        const analyzeBtn = document.createElement('button'); 
+        analyzeBtn.id = 'hck-analyze-btn'; 
+        analyzeBtn.textContent = `Analisar Questão`; 
+        analyzeBtn.style.cssText = buttonPrimaryStyle;
+        
+        const clearBtn = document.createElement('button'); 
+        clearBtn.textContent = `Limpar Tudo`; 
+        clearBtn.style.cssText = buttonSecondaryStyle;
+        
+        const logsBtn = document.createElement('button'); 
+        logsBtn.textContent = `Ver Logs`; 
+        logsBtn.style.cssText = buttonSecondaryStyle;
+        
         const credits = document.createElement('div');
         credits.innerHTML = `<span style="font-weight: 600; letter-spacing: 0.5px;">v${SCRIPT_VERSION}</span> <span style="margin: 0 4px;">|</span> <span style="opacity: 0.7;">by Hackermoon</span>`;
-        credits.style.cssText = ` text-align: center; font-size: 10px; font-weight: 500; color: ${estilo.cores.textoSecundario}; margin-top: 8px; padding-top: 6px; border-top: 1px solid ${estilo.cores.borda}; opacity: 0.9; `;
-        const notificationContainer = document.createElement('div'); notificationContainer.id = 'hck-notifications'; notificationContainer.style.cssText = ` position: fixed; bottom: 15px; left: 50%; transform: translateX(-50%); z-index: 10002; display: flex; flex-direction: column; align-items: center; gap: 10px; width: auto; max-width: 90%; `;
+        credits.style.cssText = ` 
+            text-align: center; 
+            font-size: 10px; 
+            font-weight: 500; 
+            color: ${estilo.cores.textoSecundario}; 
+            margin-top: 8px; 
+            padding-top: 6px; 
+            border-top: 1px solid ${estilo.cores.borda}; 
+            opacity: 0.9; 
+        `;
+        
+        const notificationContainer = document.createElement('div'); 
+        notificationContainer.id = 'hck-notifications'; 
+        notificationContainer.style.cssText = ` 
+            position: fixed; 
+            bottom: 15px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            z-index: 10002; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            gap: 10px; 
+            width: auto; 
+            max-width: 90%; 
+        `;
+        
         STATE.notificationContainer = notificationContainer;
         menu.append(header, input, updateImagesBtn, imagesContainer, analyzeBtn, clearBtn, logsBtn, credits);
         container.append(menu, toggleBtn);
-        document.body.appendChild(container); document.body.appendChild(notificationContainer);
+        document.body.appendChild(container); 
+        document.body.appendChild(notificationContainer);
         logMessage('INFO', 'Elementos da UI adicionados à página.');
 
         logMessage('WARN', '--- ALERTA DE SEGURANÇA ---');
@@ -514,22 +762,370 @@ ${imageParts.length > 0 ? '\nIMAGENS (Analise cuidadosamente):\n' : (imageFetchE
         logMessage('WARN', 'Considere remover as chaves ou usar um método mais seguro.');
         logMessage('WARN', '--- FIM ALERTA SEGURANÇA ---');
 
+        const toggleMenu = (show) => { 
+            const duration = 350; 
+            if (show) { 
+                logMessage('DEBUG', 'Mostrando menu...'); 
+                menu.style.display = 'flex'; 
+                toggleBtn.style.opacity = '0'; 
+                toggleBtn.style.transform = 'scale(0.8) translateY(10px)'; 
+                setTimeout(() => { 
+                    menu.style.opacity = '1'; 
+                    menu.style.transform = 'translateY(0) scale(1)'; 
+                    toggleBtn.style.display = 'none'; 
+                }, 10); 
+            } else { 
+                logMessage('DEBUG', 'Escondendo menu...'); 
+                menu.style.opacity = '0'; 
+                menu.style.transform = 'translateY(15px) scale(0.95)'; 
+                setTimeout(() => { 
+                    menu.style.display = 'none'; 
+                    toggleBtn.style.display = 'block'; 
+                    requestAnimationFrame(() => { 
+                        toggleBtn.style.opacity = '1'; 
+                        toggleBtn.style.transform = 'scale(1) translateY(0)'; 
+                    }); 
+                }, duration); 
+            } 
+        };
+        
+        toggleBtn.addEventListener('click', () => toggleMenu(true)); 
+        closeBtn.addEventListener('click', () => toggleMenu(false));
+        
+        const hideLogs = () => { 
+            if (STATE.logModal) { 
+                STATE.logModal.style.display = 'none'; 
+                logMessage('DEBUG', 'Escondendo logs.'); 
+            } 
+        };
+        
+        document.addEventListener('keydown', (e) => { 
+            if (e.key === 'Escape') { 
+                if (menu.style.display === 'flex') toggleMenu(false); 
+                if (STATE.logModal?.style.display !== 'none') hideLogs(); 
+            } 
+        });
+        
+        window.addEventListener('resize', () => { 
+            const s = getResponsiveSize(); 
+            menu.style.width = s.menuWidth; 
+            input.style.minHeight = s.textareaHeight; 
+            input.style.fontSize = s.fontSize; 
+            [analyzeBtn, clearBtn, updateImagesBtn, logsBtn].forEach(b => { 
+                b.style.fontSize = s.fontSize; 
+                b.style.padding = s.buttonPadding; 
+            }); 
+            imagesContainer.style.fontSize = `calc(${s.fontSize} - 2px)`; 
+            title.style.fontSize = s.titleSize; 
+        });
 
-        const toggleMenu = (show) => { const duration = 350; if (show) { logMessage('DEBUG', 'Mostrando menu...'); menu.style.display = 'flex'; toggleBtn.style.opacity = '0'; toggleBtn.style.transform = 'scale(0.8) translateY(10px)'; setTimeout(() => { menu.style.opacity = '1'; menu.style.transform = 'translateY(0) scale(1)'; toggleBtn.style.display = 'none'; }, 10); } else { logMessage('DEBUG', 'Escondendo menu...'); menu.style.opacity = '0'; menu.style.transform = 'translateY(15px) scale(0.95)'; setTimeout(() => { menu.style.display = 'none'; toggleBtn.style.display = 'block'; requestAnimationFrame(() => { toggleBtn.style.opacity = '1'; toggleBtn.style.transform = 'scale(1) translateY(0)'; }); }, duration); } };
-        toggleBtn.addEventListener('click', () => toggleMenu(true)); closeBtn.addEventListener('click', () => toggleMenu(false));
-        const hideLogs = () => { if (STATE.logModal) { STATE.logModal.style.display = 'none'; logMessage('DEBUG', 'Escondendo logs.'); } };
-        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { if (menu.style.display === 'flex') toggleMenu(false); if (STATE.logModal?.style.display !== 'none') hideLogs(); } });
-        window.addEventListener('resize', () => { const s = getResponsiveSize(); menu.style.width = s.menuWidth; input.style.minHeight = s.textareaHeight; input.style.fontSize = s.fontSize; [analyzeBtn, clearBtn, updateImagesBtn, logsBtn].forEach(b => { b.style.fontSize = s.fontSize; b.style.padding = s.buttonPadding; }); imagesContainer.style.fontSize = `calc(${s.fontSize} - 2px)`; title.style.fontSize = s.titleSize; });
+        const updateImageButtons = (images) => { 
+            if (!imagesContainer) return; 
+            if (images.length === 0) { 
+                imagesContainer.innerHTML = `<div style="text-align: center; padding: 1px; font-size: 0.9em; color: ${estilo.cores.textoSecundario};">Nenhuma imagem relevante</div>`; 
+                return; 
+            } 
+            imagesContainer.innerHTML = images.map((img, i) => ` 
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0; border-bottom: 1px solid ${estilo.cores.borda}; gap: 4px;"> 
+                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; color: ${estilo.cores.texto}; font-size:0.9em;" title="${img}">Imagem ${i + 1}</span> 
+                    <button data-url="${img}" title="Copiar URL" style="background: ${estilo.cores.fundoTerciario}; color: ${estilo.cores.textoSecundario}; border: none; border-radius: 4px; padding: 1px 4px; font-size: 9px; cursor: pointer; white-space: nowrap; transition: all 0.2s ease; font-weight: 500;">Copiar</button> 
+                </div> 
+            `).join(''); 
+            
+            imagesContainer.querySelectorAll('button[data-url]').forEach(b => {
+                b.addEventListener('mouseenter', () => {
+                    b.style.color = estilo.cores.texto;
+                    b.style.backgroundColor = estilo.cores.borda;
+                });
+                
+                b.addEventListener('mouseleave', () => {
+                    b.style.color = estilo.cores.textoSecundario;
+                    b.style.backgroundColor = estilo.cores.fundoTerciario;
+                });
+                
+                b.addEventListener('click', (e) => { 
+                    navigator.clipboard.writeText(e.target.dataset.url).then(() => { 
+                        e.target.textContent = 'Copiado!'; 
+                        setTimeout(() => { 
+                            e.target.textContent = 'Copiar'; 
+                        }, 1200); 
+                    }).catch(err => { 
+                        logMessage('ERROR', 'Falha ao copiar:', err); 
+                        e.target.textContent = 'Falha!'; 
+                        setTimeout(() => { 
+                            e.target.textContent = 'Copiar'; 
+                        }, 1500); 
+                    }); 
+                }); 
+            }); 
+        };
 
-        const updateImageButtons = (images) => { if (!imagesContainer) return; if (images.length === 0) { imagesContainer.innerHTML = `<div style="text-align: center; padding: 1px; font-size: 0.9em; color: ${estilo.cores.textoSecundario};">Nenhuma imagem relevante</div>`; return; } imagesContainer.innerHTML = images.map((img, i) => ` <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0; border-bottom: 1px solid ${estilo.cores.borda}; gap: 4px; &:last-child {border-bottom: none;}"> <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; color: ${estilo.cores.texto}; font-size:0.9em;" title="${img}">Imagem ${i + 1}</span> <button data-url="${img}" title="Copiar URL" style="background: ${estilo.cores.fundoTerciario}; color: ${estilo.cores.textoSecundario}; border: none; border-radius: 4px; padding: 1px 4px; font-size: 9px; cursor: pointer; white-space: nowrap; transition: all 0.2s ease; font-weight: 500; &:hover{color: ${estilo.cores.texto}; background: ${estilo.cores.borda}}">Copiar</button> </div> `).join(''); imagesContainer.querySelectorAll('button[data-url]').forEach(b => { b.addEventListener('mouseenter', () => b.style.backgroundColor = estilo.cores.borda); b.addEventListener('mouseleave', () => b.style.backgroundColor = estilo.cores.fundoTerciario); b.addEventListener('click', (e) => { navigator.clipboard.writeText(e.target.dataset.url).then(() => { e.target.textContent = 'Copiado!'; setTimeout(() => { e.target.textContent = 'Copiar'; }, 1200); }).catch(err => { logMessage('ERROR', 'Falha ao copiar:', err); e.target.textContent = 'Falha!'; setTimeout(() => { e.target.textContent = 'Copiar'; }, 1500); }); }); }); };
+        const showResponse = (result, duration) => { 
+            if (!STATE.notificationContainer) { 
+                logMessage('ERROR', "Container de notificação não encontrado!"); 
+                return; 
+            } 
+            
+            const { answer = "Info", detail = "", type = 'info' } = result || {}; 
+            let icon = 'ℹ️'; 
+            let titleText = answer; 
+            let detailText = detail; 
+            let effectiveDuration = duration || (type === 'error' || type === 'warn' ? CONFIG.NOTIFICATION_TIMEOUT_LONG : CONFIG.NOTIFICATION_TIMEOUT); 
+            
+            switch (type) { 
+                case 'success': icon = '✅'; break; 
+                case 'error': icon = '❌'; break; 
+                case 'warn': icon = '⚠️'; break; 
+                case 'info': icon = 'ℹ️'; break; 
+            } 
+            
+            const notification = document.createElement('div'); 
+            notification.style.cssText = ` 
+                background-color: ${estilo.cores.notificationBg}; 
+                backdrop-filter: blur(10px); 
+                -webkit-backdrop-filter: blur(10px); 
+                color: ${estilo.cores.texto}; 
+                padding: 10px 15px; 
+                border-radius: ${estilo.radiusSmall}; 
+                box-shadow: ${estilo.sombras.notification}; 
+                display: flex; 
+                align-items: center; 
+                gap: 10px; 
+                min-width: 180px; 
+                max-width: 320px; 
+                opacity: 0; 
+                transform: translateY(15px); 
+                transition: opacity 0.3s ease-out, transform 0.3s ease-out; 
+                border: 1px solid ${estilo.cores.borda}; 
+                cursor: pointer; 
+            `; 
+            
+            const iconSpan = document.createElement('span'); 
+            iconSpan.textContent = icon; 
+            iconSpan.style.fontSize = '1.2em'; 
+            
+            const textContent = document.createElement('div'); 
+            textContent.style.cssText = `flex-grow: 1; font-size: 0.95em; line-height: 1.3; word-break: break-word;`; 
+            textContent.innerHTML = `<span style="font-weight: 600; color: ${estilo.cores.texto};">${titleText}</span> ${detailText ? `<span style="font-size: 0.9em; color: ${estilo.cores.textoSecundario}; margin-left: 3px;">${detailText}</span>` : ''}`; 
+            
+            let dismissTimeout; 
+            const dismiss = () => { 
+                clearTimeout(dismissTimeout); 
+                notification.style.opacity = '0'; 
+                notification.style.transform = 'translateY(20px)'; 
+                setTimeout(() => notification.remove(), 300); 
+            }; 
+            
+            notification.onclick = dismiss; 
+            notification.append(iconSpan, textContent); 
+            STATE.notificationContainer.appendChild(notification); 
+            requestAnimationFrame(() => { 
+                notification.style.opacity = '1'; 
+                notification.style.transform = 'translateY(0)'; 
+            }); 
+            
+            dismissTimeout = setTimeout(dismiss, effectiveDuration); 
+            logMessage('INFO', `Notificação (${effectiveDuration}ms): ${titleText} ${detailText}. Tipo: ${type}`); 
+        };
 
-        const showResponse = (result, duration) => { if (!STATE.notificationContainer) { logMessage('ERROR', "Container de notificação não encontrado!"); return; } const { answer = "Info", detail = "", type = 'info' } = result || {}; let icon = 'ℹ️'; let titleText = answer; let detailText = detail; let effectiveDuration = duration || (type === 'error' || type === 'warn' ? CONFIG.NOTIFICATION_TIMEOUT_LONG : CONFIG.NOTIFICATION_TIMEOUT); switch (type) { case 'success': icon = '✅'; break; case 'error': icon = '❌'; break; case 'warn': icon = '⚠️'; break; case 'info': icon = 'ℹ️'; break; } const notification = document.createElement('div'); notification.style.cssText = ` background-color: ${estilo.cores.notificationBg}; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); color: ${estilo.cores.texto}; padding: 10px 15px; border-radius: ${estilo.radiusSmall}; box-shadow: ${estilo.sombras.notification}; display: flex; align-items: center; gap: 10px; min-width: 180px; max-width: 320px; opacity: 0; transform: translateY(15px); transition: opacity 0.3s ease-out, transform 0.3s ease-out; border: 1px solid ${estilo.cores.borda}; cursor: pointer; `; const iconSpan = document.createElement('span'); iconSpan.textContent = icon; iconSpan.style.fontSize = '1.2em'; const textContent = document.createElement('div'); textContent.style.cssText = `flex-grow: 1; font-size: 0.95em; line-height: 1.3; word-break: break-word;`; textContent.innerHTML = `<span style="font-weight: 600; color: ${estilo.cores.texto};">${titleText}</span> ${detailText ? `<span style="font-size: 0.9em; color: ${estilo.cores.textoSecundario}; margin-left: 3px;">${detailText}</span>` : ''}`; let dismissTimeout; const dismiss = () => { clearTimeout(dismissTimeout); notification.style.opacity = '0'; notification.style.transform = 'translateY(20px)'; setTimeout(() => notification.remove(), 300); }; notification.onclick = dismiss; notification.append(iconSpan, textContent); STATE.notificationContainer.appendChild(notification); requestAnimationFrame(() => { notification.style.opacity = '1'; notification.style.transform = 'translateY(0)'; }); dismissTimeout = setTimeout(dismiss, effectiveDuration); logMessage('INFO', `Notificação (${effectiveDuration}ms): ${titleText} ${detailText}. Tipo: ${type}`); };
-
-        const createLogModal = () => { if (STATE.logModal) return; logMessage('DEBUG', 'Criando modal de logs.'); const modal = document.createElement('div'); modal.id = 'hck-log-modal'; modal.style.cssText = ` position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 10001; font-family: 'Inter', sans-serif; backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);`; const modalContent = document.createElement('div'); modalContent.style.cssText = ` background-color: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.texto}; padding: 15px 20px; border-radius: ${estilo.radius}; border: 1px solid ${estilo.cores.borda}; width: 85%; max-width: 800px; height: 75%; max-height: 650px; display: flex; flex-direction: column; box-shadow: ${estilo.sombras.menu}; `; const modalHeader = document.createElement('div'); modalHeader.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid ${estilo.cores.borda}; padding-bottom: 8px; gap: 10px;`; const modalTitle = document.createElement('h3'); modalTitle.textContent = 'Logs Detalhados (Bookmarklet)'; modalTitle.style.cssText = `margin: 0; color: ${estilo.cores.texto}; font-weight: 600; font-size: 16px; flex-grow: 1;`; const copyLogBtn = document.createElement('button'); copyLogBtn.textContent = 'Copiar Logs'; copyLogBtn.style.cssText = ` background: ${estilo.cores.copyBtnBg}; color: ${estilo.cores.secondaryAccent}; border: none; font-size: 11px; font-weight: 500; padding: 4px 8px; border-radius: ${estilo.radiusSmall}; cursor: pointer; transition: background-color 0.2s ease; flex-shrink: 0; &:hover { background: ${estilo.cores.borda}; }`; copyLogBtn.onclick = () => { const textToCopy = STATE.logMessages.map(log => `[${log.timestamp} ${log.level}] ${log.message}`).join('\n'); navigator.clipboard.writeText(textToCopy).then(() => { copyLogBtn.textContent = 'Copiado!'; setTimeout(() => { copyLogBtn.textContent = 'Copiar Logs'; }, 2000); logMessage('INFO', 'Logs copiados.'); }).catch(err => { logMessage('ERROR', 'Falha ao copiar logs:', err); copyLogBtn.textContent = 'Erro!'; setTimeout(() => { copyLogBtn.textContent = 'Copiar Logs'; }, 2000); }); }; const closeLogBtn = document.createElement('button'); closeLogBtn.innerHTML = '×'; closeLogBtn.setAttribute('aria-label', 'Fechar Logs'); closeLogBtn.style.cssText = ` background: ${estilo.cores.fundoTerciario}; border: none; color: ${estilo.cores.textoSecundario}; font-size: 18px; font-weight: bold; cursor: pointer; padding: 0; line-height: 1; border-radius: 50%; width: 24px; height: 24px; display:flex; align-items:center; justify-content:center; transition: all 0.2s ease; flex-shrink: 0; &:hover { background-color: ${estilo.cores.borda}; color: ${estilo.cores.texto}; } `; closeLogBtn.onclick = hideLogs; modalHeader.append(modalTitle, copyLogBtn, closeLogBtn); const logArea = document.createElement('div'); logArea.id = 'hck-log-area'; logArea.style.cssText = ` flex-grow: 1; overflow-y: auto; font-size: 11px; line-height: 1.6; background-color: ${estilo.cores.fundo}; border-radius: ${estilo.radiusSmall}; padding: 10px; border: 1px solid ${estilo.cores.borda}; white-space: pre-wrap; word-wrap: break-word; scrollbar-width: thin; scrollbar-color: ${estilo.cores.fundoTerciario} ${estilo.cores.fundo}; font-family: Menlo, Monaco, Consolas, 'Courier New', monospace; `; modalContent.append(modalHeader, logArea); modal.appendChild(modalContent); document.body.appendChild(modal); STATE.logModal = modal; };
-        const showLogs = () => { logMessage('DEBUG', 'showLogs chamado.'); if (!STATE.logModal) createLogModal(); const logArea = STATE.logModal?.querySelector('#hck-log-area'); if (!logArea) { logMessage('ERROR', 'Área de log não encontrada no modal.'); return;} logMessage('INFO', `Exibindo ${STATE.logMessages.length} logs.`); const logColors = { ERROR: estilo.cores.erro, WARN: estilo.cores.warn, INFO: estilo.cores.info, DEBUG: estilo.cores.logDebug, DEFAULT: estilo.cores.textoSecundario }; const sanitize = (str) => { const temp = document.createElement('div'); temp.textContent = str; return temp.innerHTML; }; logArea.innerHTML = STATE.logMessages.map(log => { const color = logColors[log.level] || logColors.DEFAULT; return `<span style="color: ${color}; font-weight: bold;">[${log.timestamp} ${log.level}]</span> <span style="color:${estilo.cores.texto};">${sanitize(log.message)}</span>`; }).join('\n'); if(STATE.logModal) STATE.logModal.style.display = 'flex'; logArea.scrollTop = logArea.scrollHeight; };
+        const createLogModal = () => { 
+            if (STATE.logModal) return; 
+            logMessage('DEBUG', 'Criando modal de logs.'); 
+            
+            const modal = document.createElement('div'); 
+            modal.id = 'hck-log-modal'; 
+            modal.style.cssText = ` 
+                position: fixed; 
+                top: 0; 
+                left: 0; 
+                width: 100%; 
+                height: 100%; 
+                background-color: rgba(0,0,0,0.75); 
+                display: none; 
+                align-items: center; 
+                justify-content: center; 
+                z-index: 10001; 
+                font-family: 'Inter', sans-serif; 
+                backdrop-filter: blur(5px); 
+                -webkit-backdrop-filter: blur(5px); 
+            `; 
+            
+            const modalContent = document.createElement('div'); 
+            modalContent.style.cssText = ` 
+                background-color: ${estilo.cores.fundoSecundario}; 
+                color: ${estilo.cores.texto}; 
+                padding: 15px 20px; 
+                border-radius: ${estilo.radius}; 
+                border: 1px solid ${estilo.cores.borda}; 
+                width: 85%; 
+                max-width: 800px; 
+                height: 75%; 
+                max-height: 650px; 
+                display: flex; 
+                flex-direction: column; 
+                box-shadow: ${estilo.sombras.menu}; 
+            `; 
+            
+            const modalHeader = document.createElement('div'); 
+            modalHeader.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid ${estilo.cores.borda}; padding-bottom: 8px; gap: 10px;`; 
+            
+            const modalTitle = document.createElement('h3'); 
+            modalTitle.textContent = 'Logs Detalhados (Bookmarklet)'; 
+            modalTitle.style.cssText = `margin: 0; color: ${estilo.cores.texto}; font-weight: 600; font-size: 16px; flex-grow: 1;`; 
+            
+            const copyLogBtn = document.createElement('button'); 
+            copyLogBtn.textContent = 'Copiar Logs'; 
+            copyLogBtn.style.cssText = ` 
+                background: ${estilo.cores.copyBtnBg}; 
+                color: ${estilo.cores.secondaryAccent}; 
+                border: none; 
+                font-size: 11px; 
+                font-weight: 500; 
+                padding: 4px 8px; 
+                border-radius: ${estilo.radiusSmall}; 
+                cursor: pointer; 
+                transition: background-color 0.2s ease; 
+                flex-shrink: 0; 
+            `;
+            
+            copyLogBtn.addEventListener('mouseenter', () => {
+                copyLogBtn.style.backgroundColor = estilo.cores.borda;
+            });
+            
+            copyLogBtn.addEventListener('mouseleave', () => {
+                copyLogBtn.style.backgroundColor = estilo.cores.copyBtnBg;
+            });
+            
+            copyLogBtn.onclick = () => { 
+                const textToCopy = STATE.logMessages.map(log => `[${log.timestamp} ${log.level}] ${log.message}`).join('\n'); 
+                navigator.clipboard.writeText(textToCopy).then(() => { 
+                    copyLogBtn.textContent = 'Copiado!'; 
+                    setTimeout(() => { 
+                        copyLogBtn.textContent = 'Copiar Logs'; 
+                    }, 2000); 
+                    logMessage('INFO', 'Logs copiados.'); 
+                }).catch(err => { 
+                    logMessage('ERROR', 'Falha ao copiar logs:', err); 
+                    copyLogBtn.textContent = 'Erro!'; 
+                    setTimeout(() => { 
+                        copyLogBtn.textContent = 'Copiar Logs'; 
+                    }, 2000); 
+                }); 
+            }; 
+            
+            const closeLogBtn = document.createElement('button'); 
+            closeLogBtn.innerHTML = '×'; 
+            closeLogBtn.setAttribute('aria-label', 'Fechar Logs'); 
+            closeLogBtn.style.cssText = ` 
+                background: ${estilo.cores.fundoTerciario}; 
+                border: none; 
+                color: ${estilo.cores.textoSecundario}; 
+                font-size: 18px; 
+                font-weight: bold; 
+                cursor: pointer; 
+                padding: 0; 
+                line-height: 1; 
+                border-radius: 50%; 
+                width: 24px; 
+                height: 24px; 
+                display:flex; 
+                align-items:center; 
+                justify-content:center; 
+                transition: all 0.2s ease; 
+                flex-shrink: 0; 
+            `;
+            
+            closeLogBtn.addEventListener('mouseenter', () => {
+                closeLogBtn.style.backgroundColor = estilo.cores.borda;
+                closeLogBtn.style.color = estilo.cores.texto;
+            });
+            
+            closeLogBtn.addEventListener('mouseleave', () => {
+                closeLogBtn.style.backgroundColor = estilo.cores.fundoTerciario;
+                closeLogBtn.style.color = estilo.cores.textoSecundario;
+            });
+            
+            closeLogBtn.onclick = hideLogs; 
+            modalHeader.append(modalTitle, copyLogBtn, closeLogBtn); 
+            
+            const logArea = document.createElement('div'); 
+            logArea.id = 'hck-log-area'; 
+            logArea.style.cssText = ` 
+                flex-grow: 1; 
+                overflow-y: auto; 
+                font-size: 11px; 
+                line-height: 1.6; 
+                background-color: ${estilo.cores.fundo}; 
+                border-radius: ${estilo.radiusSmall}; 
+                padding: 10px; 
+                border: 1px solid ${estilo.cores.borda}; 
+                white-space: pre-wrap; 
+                word-wrap: break-word; 
+                scrollbar-width: thin; 
+                scrollbar-color: ${estilo.cores.fundoTerciario} ${estilo.cores.fundo}; 
+                font-family: Menlo, Monaco, Consolas, 'Courier New', monospace; 
+            `; 
+            
+            modalContent.append(modalHeader, logArea); 
+            modal.appendChild(modalContent); 
+            document.body.appendChild(modal); 
+            STATE.logModal = modal; 
+        };
+        
+        const showLogs = () => { 
+            logMessage('DEBUG', 'showLogs chamado.'); 
+            if (!STATE.logModal) createLogModal(); 
+            
+            const logArea = STATE.logModal?.querySelector('#hck-log-area'); 
+            if (!logArea) { 
+                logMessage('ERROR', 'Área de log não encontrada no modal.'); 
+                return;
+            } 
+            
+            logMessage('INFO', `Exibindo ${STATE.logMessages.length} logs.`); 
+            const logColors = { 
+                ERROR: estilo.cores.erro, 
+                WARN: estilo.cores.warn, 
+                INFO: estilo.cores.info, 
+                DEBUG: estilo.cores.logDebug, 
+                DEFAULT: estilo.cores.textoSecundario 
+            }; 
+            
+            const sanitize = (str) => { 
+                const temp = document.createElement('div'); 
+                temp.textContent = str; 
+                return temp.innerHTML; 
+            }; 
+            
+            logArea.innerHTML = STATE.logMessages.map(log => { 
+                const color = logColors[log.level] || logColors.DEFAULT; 
+                return `<span style="color: ${color}; font-weight: bold;">[${log.timestamp} ${log.level}]</span> <span style="color:${estilo.cores.texto};">${sanitize(log.message)}</span>`; 
+            }).join('\n'); 
+            
+            if(STATE.logModal) STATE.logModal.style.display = 'flex'; 
+            logArea.scrollTop = logArea.scrollHeight; 
+        };
+        
         logsBtn.addEventListener('click', showLogs);
 
-        return { elements: { input, analyzeBtn, clearBtn, updateImagesBtn, logsBtn, imagesContainer, toggleBtn }, helpers: { updateImageButtons, showResponse, toggleMenu, showLogs, hideLogs } };
+        return { 
+            elements: { 
+                input, 
+                analyzeBtn, 
+                clearBtn, 
+                updateImagesBtn, 
+                logsBtn, 
+                imagesContainer, 
+                toggleBtn 
+            }, 
+            helpers: { 
+                updateImageButtons, 
+                showResponse, 
+                toggleMenu, 
+                showLogs, 
+                hideLogs 
+            } 
+        };
     }
 
     function init() {
@@ -541,7 +1137,13 @@ ${imageParts.length > 0 ? '\nIMAGENS (Analise cuidadosamente):\n' : (imageFetchE
 
             const { input, analyzeBtn, clearBtn, updateImagesBtn, toggleBtn } = ui.elements;
             const { updateImageButtons, showResponse } = ui.helpers;
-            const estiloCores = { erro: '#FF453A', accentBg: '#007AFF', fundoSecundario: '#2C2C2E', textoSecundario: '#8A8A8E', borda: '#38383A' };
+            const estiloCores = { 
+                erro: '#FF453A', 
+                accentBg: '#007AFF', 
+                fundoSecundario: '#2C2C2E', 
+                textoSecundario: '#8A8A8E', 
+                borda: '#38383A' 
+            };
 
             const setAnalyzeButtonState = (analyzing, rateLimited = false) => {
                  const currentBtn = document.getElementById('hck-analyze-btn');
@@ -647,10 +1249,63 @@ ${imageParts.length > 0 ? '\nIMAGENS (Analise cuidadosamente):\n' : (imageFetchE
                 }
             };
 
-            clearBtn.onclick = () => { logMessage('INFO', "----- Limpar Clicado -----"); input.value = ''; STATE.images = []; STATE.imageCache = {}; updateImageButtons([]); input.focus(); logMessage("INFO", "Entradas limpas."); showResponse({answer: "Limpado", type: 'info'}, 3000); };
-            updateImagesBtn.onclick = () => { logMessage('INFO', "----- Atualizar Imagens Clicado -----"); try { extractImages(); updateImageButtons(STATE.images); showResponse({answer:"Imagens Atualizadas", detail:`${STATE.images.length} detectadas.`, type:'info'}, 3000); } catch (e) { logMessage("ERROR","Erro ao atualizar imagens:",e); showResponse({answer:"Erro Imagens", detail:"Falha leitura.", type:'error'}); }};
+            clearBtn.onclick = () => { 
+                logMessage('INFO', "----- Limpar Clicado -----"); 
+                input.value = ''; 
+                STATE.images = []; 
+                STATE.imageCache = {}; 
+                updateImageButtons([]); 
+                input.focus(); 
+                logMessage("INFO", "Entradas limpas."); 
+                showResponse({answer: "Limpado", type: 'info'}, 3000); 
+            };
+            
+            updateImagesBtn.onclick = () => { 
+                logMessage('INFO', "----- Atualizar Imagens Clicado -----"); 
+                try { 
+                    extractImages(); 
+                    updateImageButtons(STATE.images); 
+                    showResponse({answer:"Imagens Atualizadas", detail:`${STATE.images.length} detectadas.`, type:'info'}, 3000); 
+                } catch (e) { 
+                    logMessage("ERROR","Erro ao atualizar imagens:",e); 
+                    showResponse({answer:"Erro Imagens", detail:"Falha leitura.", type:'error'}); 
+                }
+            };
 
-            setTimeout(() => { logMessage("INFO", "Tentativa inicial de extração de imagens..."); try { extractImages(); updateImageButtons(STATE.images); } catch (e) { logMessage("ERROR", "Erro na extração inicial de imagens:", e); }}, 2000);
+            // Adicionando eventos de hover aos botões
+            [analyzeBtn, clearBtn, updateImagesBtn, logsBtn].forEach(btn => {
+                btn.addEventListener('mouseenter', () => {
+                    if (!btn.disabled) {
+                        if (btn === analyzeBtn) {
+                            btn.style.opacity = '0.85';
+                        } else {
+                            btn.style.backgroundColor = estiloCores.fundoTerciario;
+                            btn.style.opacity = '1';
+                        }
+                    }
+                });
+                
+                btn.addEventListener('mouseleave', () => {
+                    if (!btn.disabled) {
+                        if (btn === analyzeBtn) {
+                            btn.style.opacity = '1';
+                        } else {
+                            btn.style.backgroundColor = estiloCores.secondaryAccentBg;
+                            btn.style.opacity = '1';
+                        }
+                    }
+                });
+            });
+
+            setTimeout(() => { 
+                logMessage("INFO", "Tentativa inicial de extração de imagens..."); 
+                try { 
+                    extractImages(); 
+                    updateImageButtons(STATE.images); 
+                } catch (e) { 
+                    logMessage("ERROR", "Erro na extração inicial de imagens:", e); 
+                }
+            }, 2000);
 
             logMessage('INFO',`----- HCK Bookmarklet Inicializado (v${SCRIPT_VERSION}) -----`);
             ui.helpers.toggleMenu(true);

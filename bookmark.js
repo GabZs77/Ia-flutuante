@@ -43,7 +43,7 @@
       const toastStyle = {
         background: TOAST_BACKGROUND_COLOR,
         fontSize: '13.5px',
-        fontFamily: "'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif",
+        fontFamily: "'Inter', system-ui, sans-serif",
         color: TOAST_TEXT_COLOR,
         padding: '12px 18px',
         paddingBottom: '17px',
@@ -66,8 +66,8 @@
       });
 
       if (toastInstance.toastElement) {
-         toastInstance.toastElement.classList.add('hck-toast-with-progress');
-         toastInstance.toastElement.style.setProperty('--toast-duration', `${duration}ms`);
+        toastInstance.toastElement.classList.add('hck-toast-with-progress');
+        toastInstance.toastElement.style.setProperty('--toast-duration', `${duration}ms`);
       }
 
       toastInstance.showToast();
@@ -87,10 +87,7 @@
       script.src = url;
       script.type = 'text/javascript';
       script.onload = resolve;
-      script.onerror = () => {
-        console.error(`Erro ao carregar script: ${url}`);
-        reject(new Error(`Falha ao carregar ${url}`));
-      };
+      script.onerror = () => reject(new Error(`Falha ao carregar ${url}`));
       document.head.appendChild(script);
     });
   }
@@ -106,18 +103,16 @@
       link.type = 'text/css';
       link.href = url;
       link.onload = resolve;
-      link.onerror = () => {
-        console.error(`Erro ao carregar CSS: ${url}`);
-        reject(new Error(`Falha ao carregar ${url}`));
-      };
+      link.onerror = () => reject(new Error(`Falha ao carregar ${url}`));
       document.head.appendChild(link);
     });
   }
 
-  // Função para criar a janela do chatbot
   function createChatbotWindow() {
     if (document.getElementById('gc')) {
-      document.getElementById('gc').remove();
+      // apenas alterna visibilidade
+      const c = document.getElementById('gc');
+      c.style.display = c.style.display === 'none' ? 'flex' : 'none';
       return;
     }
 
@@ -135,12 +130,12 @@
         .cc{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;}
         .ci{cursor:pointer;padding:8px;width:calc(50% - 4px);border-radius:8px;background:#283045;font-size:0.8rem;}
         .ci:hover{background:#333e58;}
-        .mc{flex:1;overflow-y:auto;padding:10px;}
+        #mc{flex:1;overflow-y:auto;padding:10px;}
         .m{display:flex;gap:8px;margin:5px 0;}
         .ma{width:25px;height:25px;border-radius:50%;background:#283045;display:flex;align-items:center;justify-content:center;}
         .mu{flex-direction:row-reverse;}
-        .mu .mc{background:#283045;border-radius:10px 10px 2px 10px;padding:8px;max-width:80%;}
-        .mb .mc{background:#1a1f2e;border-radius:10px 2px 10px 10px;padding:8px;}
+        .mu .msgc{background:#283045;border-radius:10px 10px 2px 10px;padding:8px;max-width:80%;}
+        .mb .msgc{background:#1a1f2e;border-radius:10px 2px 10px 10px;padding:8px;}
         .pc{padding:10px;background:#101623;border-top:1px solid #283045;}
         .pf{display:flex;background:#283045;border-radius:20px;padding:0 10px;}
         .pi{flex:1;border:none;background:none;color:#edf3ff;outline:none;padding:8px;}
@@ -159,7 +154,7 @@
         <div class="ci">Debugar JS</div>
         <div class="ci">Componente React</div>
       </div>
-      <div class="mc" id="mc"></div>
+      <div id="mc"></div>
       <div class="pc">
         <div class="pr" id="pr">
           <div class="prc" id="prc">×</div>
@@ -174,22 +169,10 @@
     `;
     
     b.appendChild(c);
-    
-    // Inicializar funcionalidades do chatbot
     initChatbot();
-    
-    // Adicionar evento de teclado F10
-    d.addEventListener('keydown', function(e) {
-      if (e.key === 'F10') {
-        e.preventDefault();
-        c.style.display = c.style.display === 'none' ? 'block' : 'none';
-      }
-    });
-    
     sendToast("Gemini Chat pronto! Pressione F10 para mostrar/esconder", 3000);
   }
 
-  // Função para inicializar o chatbot
   function initChatbot() {
     const mc = document.getElementById('mc');
     const pf = document.getElementById('pf');
@@ -197,29 +180,25 @@
     const fi = document.getElementById('fi');
     const ab = document.getElementById('ab');
     const pr = document.getElementById('pr');
-    const prc = document.getElementById('prc');
-    const API_KEY = "AIzaSyDSIy5m7mTXlMMR_OOdCu2Af_EwoCd124w";
+    const API_KEY = "AIzaSyBDdSZkgQphf5BORTDLcEUbJWcIAIo0Yr8";
     const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
     let ch = [];
     let fd = null;
 
     ab.onclick = () => fi.click();
-    
+
     fi.onchange = e => {
       const f = e.target.files[0];
       if (!f) return;
       const r = new FileReader();
       r.onload = e => {
-        fd = {
-          type: f.type,
-          data: e.target.result.split(',')[1]
-        };
+        fd = { type: f.type, data: e.target.result.split(',')[1] };
         pr.innerHTML = `<img src="${e.target.result}" class="pri"><div class="prc">×</div>`;
         pr.style.display = 'block';
       };
       r.readAsDataURL(f);
     };
-    
+
     pr.onclick = e => {
       if (e.target.classList.contains('prc')) {
         fd = null;
@@ -227,56 +206,56 @@
         fi.value = '';
       }
     };
-    
+
     pf.onsubmit = async e => {
       e.preventDefault();
       const q = pi.value.trim();
       if (!q) return;
       pi.value = '';
-      
+
       const mu = document.createElement('div');
       mu.className = 'm mu';
-      let umc = `<div class="mc">${q}</div>`;
+      let umc = `<div class="msgc">${q}</div>`;
       if (fd) {
         umc += `<img src="data:${fd.type};base64,${fd.data}" class="pri">`;
       }
       mu.innerHTML = '<div class="ma">👤</div>' + umc;
       mc.appendChild(mu);
-      
+
       const mb = document.createElement('div');
       mb.className = 'm mb';
-      mb.innerHTML = '<div class="ma">🤖</div><div class="mc">Digitando...</div>';
+      mb.innerHTML = '<div class="ma">🤖</div><div class="msgc">Digitando...</div>';
       mc.appendChild(mb);
       mc.scrollTop = mc.scrollHeight;
-      
-      const parts = [{text: q}];
-      if (fd) parts.push({inline_data: {mime_type: fd.type, data: fd.data}});
-      ch.push({role: "user", parts});
+
+      const parts = [{ text: q }];
+      if (fd) parts.push({ inline_data: { mime_type: fd.type, data: fd.data } });
+      ch.push({ role: "user", parts });
       fd = null;
       pr.style.display = 'none';
       fi.value = '';
-      
+
       try {
         sendToast("Processando pergunta...", 2000);
         const r = await fetch(API_URL, {
           method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({contents: ch})
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: ch })
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error.message);
         let rt = data.candidates[0].content.parts[0].text;
         rt = rt.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        mb.querySelector('.mc').innerHTML = rt;
-        ch.push({role: "model", parts: [{text: rt}]});
+        mb.querySelector('.msgc').innerHTML = rt;
+        ch.push({ role: "model", parts: [{ text: rt }] });
         sendToast("Resposta recebida!", 2000);
       } catch (e) {
-        mb.querySelector('.mc').textContent = 'Erro: ' + e.message;
+        mb.querySelector('.msgc').textContent = 'Erro: ' + e.message;
         sendToast("Erro ao processar", 3000);
       }
       mc.scrollTop = mc.scrollHeight;
     };
-    
+
     document.querySelectorAll('.ci').forEach(i => {
       i.onclick = () => {
         pi.value = i.textContent;
@@ -285,17 +264,15 @@
     });
   }
 
-  // Carregar dependências e inicializar
   try {
     await loadCss('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap');
     await loadCss('https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css');
     await loadScript('https://cdn.jsdelivr.net/npm/toastify-js');
     injectToastStyles();
-    
+
     sendToast(`>> ${SCRIPT_NAME} Injetado!`, 3000);
     sendToast("Pressione F10 para abrir o chatbot", 3000);
-    
-    // Criar botão flutuante para abrir o chatbot
+
     const btn = document.createElement('button');
     btn.textContent = '💬';
     btn.style.cssText = `
@@ -315,22 +292,16 @@
     `;
     btn.onclick = createChatbotWindow;
     document.body.appendChild(btn);
-    
-    // Adicionar evento de teclado F10
+
     document.addEventListener('keydown', function(e) {
       if (e.key === 'F10') {
         e.preventDefault();
         createChatbotWindow();
       }
     });
-    
+
   } catch (error) {
     console.error("[GEMINI CHAT] Falha ao carregar dependências:", error);
     alert(`${SCRIPT_NAME}: Erro ao carregar dependências.`);
   }
-
-  // Manter a funcionalidade original de interceptação de fetch (se necessário)
-  // Aqui você pode adicionar o código original de interceptação se desejar manter
-  // Por exemplo, o código para corrigir tarefas...
-
 })();

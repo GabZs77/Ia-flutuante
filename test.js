@@ -1,47 +1,40 @@
-javascript:(async () => {
+(async () => {
     'use strict';
 
-    if (document.getElementById('hck-ui-bookmarklet')) {
-        console.warn('[HCK Bookmarklet] Já está em execução.');
+    if (document.getElementById('hck-tarefas-ui-bookmarklet')) {
+        console.warn('[HCK TAREFAS] Já está em execução.');
         try {
-            document.getElementById('hck-toggle-btn')?.focus();
+            document.getElementById('hck-tarefas-toggle-btn')?.focus();
         } catch(e) {}
         return;
     }
 
-    console.log('[HCK Bookmarklet] Iniciando...');
+    console.log('[HCK TAREFAS] Iniciando...');
 
-    // --- VERSÃO ATUALIZADA ---
-    const SCRIPT_VERSION = '8.0.3-alpha';
-    const SCRIPT_NAME = 'HCK Bookmarklet';
-    const CONFIG = {
-        GEMINI_API_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/models/',
-        MODELS: [
-            { name: 'Pro 1.5', id: 'gemini-1.5-pro-latest' },
-            { name: 'Flash 1.5', id: 'gemini-1.5-flash-latest' }
-        ],
-        API_KEYS_GEMINI: [
-            // 002
-            'AIzaSyBDdSZkgQphf5BORTDLcEUbJWcIAIo0Yr8', // 001
-            'AIzaSyANp5yxdrdGL7RtOXy0LdIdkoKZ7cVPIsc'  // 003
-        ],
-        TIMEOUT: 28000,
-        MAX_RETRIES: 2,
-        API_RETRY_DELAY_BASE: 1500,
-        API_RATE_LIMIT_DELAY_MULTIPLIER: 4,
-        TEMPERATURE: 0.35,
-        TOP_P: 0.9,
-        MAX_OUTPUT_TOKENS: 10,
-        NOTIFICATION_TIMEOUT: 5000,
-        NOTIFICATION_TIMEOUT_LONG: 8000,
-        SAFETY_SETTINGS_THRESHOLD: "BLOCK_MEDIUM_AND_ABOVE"
-    };
-
+    const SCRIPT_NAME = "HCK TAREFAS";
+    const SCRIPT_VERSION = '1.0.0';
     const TOAST_BACKGROUND_COLOR = 'rgba(20, 20, 20, 0.9)';
     const TOAST_TEXT_COLOR = '#f0f0f0';
 
+    // Estado global do script
+    const STATE = {
+        isActive: true,
+        capturedLoginData: null,
+        isToastifyLoaded: false,
+        logMessages: [],
+        logModal: null,
+        notificationContainer: null,
+        interceptEnabled: true,
+        correctedTasks: [],
+        stats: {
+            totalIntercepted: 0,
+            totalCorrected: 0,
+            totalFailed: 0
+        }
+    };
+
     function injectToastStyles() {
-        const styleId = 'hck-toast-styles';
+        const styleId = 'hck-tarefas-toast-styles';
         if (document.getElementById(styleId)) return;
 
         const css = `
@@ -49,11 +42,11 @@ javascript:(async () => {
             from { width: 100%; }
             to { width: 0%; }
           }
-          .hck-toast-with-progress {
+          .hck-tarefas-toast-with-progress {
             position: relative;
             overflow: hidden;
           }
-          .hck-toast-with-progress::after {
+          .hck-tarefas-toast-with-progress::after {
             content: '';
             position: absolute;
             bottom: 0;
@@ -101,7 +94,7 @@ javascript:(async () => {
             });
 
             if (toastInstance.toastElement) {
-                toastInstance.toastElement.classList.add('hck-toast-with-progress');
+                toastInstance.toastElement.classList.add('hck-tarefas-toast-with-progress');
                 toastInstance.toastElement.style.setProperty('--toast-duration', `${duration}ms`);
             }
 
@@ -150,439 +143,180 @@ javascript:(async () => {
         });
     }
 
-    const IMAGE_FILTERS = {
-        blocked: [
-            // Regras gerais para pastas comuns de assets
-            /edusp-static\.ip\.tv\/sala-do-futuro\/(?:assets|icons?|logos?|buttons?|banners?)\//i,
-            /s3\.sa-east-1\.amazonaws\.com\/edusp-static\.ip\.tv\/sala-do-futuro\/(?:assets|icons?|logos?|buttons?|banners?)\//i,
-            /s3\.sa-east-1\.amazonaws\.com\/edusp-static\.ip\.tv\/room\/cards\//i,
-            // Logos específicos e padrões comuns a serem bloqueados
-            /conteudo_logo\.png$/i,
-            // --- REGRA ADICIONADA PARA BLOQUEAR O LOGO ESPECÍFICO ---
-            /logo_sala_do_futuro\.png$/i,
-            // Thumbnails e SVGs
-            /_thumb(?:nail)?\./i,
-            /\.svg$/i
-        ],
-        allowed: [
-            // Padrões comuns para imagens de questões
-            /edusp-static\.ip\.tv\/(?:tms|tarefas|exercicios)\//i,
-            /\/atividade\/\d+\?eExame=true/i,
-            /\.(?:jpg|png|jpeg|gif|webp)$/i,
-            /lh[0-9]+(?:- G*)*\.googleusercontent\.com/i, // Imagens do Google Drive/Classroom
-            /\/media\//i, // Pastas de mídia genéricas
-            /\/questao_\d+/i, // Padrão de nome de arquivo de questão
-            /image\?/i // URLs que terminam com 'image?' (comum em alguns sistemas)
-        ],
-        verify(src) {
-            if (!src || typeof src !== 'string' || !src.startsWith('http')) return false;
-            // Verifica se está na lista de bloqueados PRIMEIRO
-            if (this.blocked.some(r => r.test(src))) {
-                logMessage('DEBUG', `Image blocked by filter: ${src.substring(0,80)}...`);
-                return false;
-            }
-            // Se não bloqueado, verifica se está na lista de permitidos
-            if (this.allowed.some(r => r.test(src))) {
-                 logMessage('DEBUG', `Image allowed by filter: ${src.substring(0,80)}...`);
-                return true;
-            }
-            // Se não está em nenhuma das listas (ou não explicitamente permitido), bloqueia por padrão
-            logMessage('DEBUG', `Image implicitly blocked (not in allow list): ${src.substring(0,80)}...`);
-            return false;
-        }
-    };
-
-    const STATE = {
-        isAnalyzing: false,
-        images: [],
-        imageCache: {},
-        logMessages: [],
-        logModal: null,
-        notificationContainer: null,
-        currentApiKeyIndex: 0,
-        rateLimitActive: false,
-        rateLimitTimeoutId: null
-    };
-
-    const logMessage = (level, ...args) => {
+    function logMessage(level, ...args) {
         const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const message = args.map(arg => { try { return typeof arg === 'object' ? JSON.stringify(arg) : String(arg); } catch { return '[Object]'; } }).join(' ');
         STATE.logMessages.push({ timestamp, level, message });
         if (STATE.logMessages.length > 300) { STATE.logMessages.shift(); }
-        const consoleArgs = [`[HCK ${timestamp}]`, ...args];
+        const consoleArgs = [`[HCK TAREFAS ${timestamp}]`, ...args];
         switch(level) {
             case 'ERROR': console.error(...consoleArgs); break;
             case 'WARN': console.warn(...consoleArgs); break;
             case 'INFO': console.info(...consoleArgs); break;
             default: console.log(...consoleArgs);
         }
-    };
+    }
 
-    const withTimeout = (promise, ms) => Promise.race([
-        promise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout ${ms}ms`)), ms))
-    ]);
+    function removeHtmlTags(htmlString) {
+        const div = document.createElement('div');
+        div.innerHTML = htmlString || '';
+        return div.textContent || div.innerText || '';
+    }
 
-    async function fetchWithRetry(modelName, callback, retries = CONFIG.MAX_RETRIES) {
-        logMessage('DEBUG', `[${modelName}] Iniciando fetch/retry (Máx ${retries} tentativas)`);
-        for (let attempt = 0; attempt <= retries; attempt++) {
+    function transformJson(jsonOriginal) {
+        if (!jsonOriginal || !jsonOriginal.task || !jsonOriginal.task.questions) {
+            console.error("[HCK TAREFAS] Estrutura do JSON original inválida para transformação:", jsonOriginal);
+            throw new Error("Estrutura de dados inválida para transformação.");
+        }
+
+        let novoJson = {
+            accessed_on: jsonOriginal.accessed_on,
+            executed_on: jsonOriginal.executed_on,
+            answers: {}
+        };
+
+        for (let questionId in jsonOriginal.answers) {
+            let questionData = jsonOriginal.answers[questionId];
+            let taskQuestion = jsonOriginal.task.questions.find(q => q.id === parseInt(questionId));
+
+            if (!taskQuestion) {
+                continue;
+            }
+
+            let answerPayload = {
+                question_id: questionData.question_id,
+                question_type: taskQuestion.type,
+                answer: null
+            };
+
             try {
-                if (STATE.rateLimitActive && attempt === 0) {
-                    const initialRateLimitDelay = 1000;
-                    logMessage('WARN', `[${modelName}] Rate limit global ativo, delay inicial: ${initialRateLimitDelay}ms`);
-                    await new Promise(r => setTimeout(r, initialRateLimitDelay));
+                switch (taskQuestion.type) {
+                    case "order-sentences":
+                        if (taskQuestion.options && taskQuestion.options.sentences && Array.isArray(taskQuestion.options.sentences)) {
+                            answerPayload.answer = taskQuestion.options.sentences.map(sentence => sentence.value);
+                        }
+                        break;
+                    case "fill-words":
+                        if (taskQuestion.options && taskQuestion.options.phrase && Array.isArray(taskQuestion.options.phrase)) {
+                            answerPayload.answer = taskQuestion.options.phrase
+                                .map(item => item.value)
+                                .filter((_, index) => index % 2 !== 0);
+                        }
+                        break;
+                    case "text_ai":
+                        let cleanedAnswer = removeHtmlTags(taskQuestion.comment || '');
+                        answerPayload.answer = { "0": cleanedAnswer };
+                        break;
+                    case "fill-letters":
+                        if (taskQuestion.options && taskQuestion.options.answer !== undefined) {
+                            answerPayload.answer = taskQuestion.options.answer;
+                        }
+                        break;
+                    case "cloud":
+                        if (taskQuestion.options && taskQuestion.options.ids && Array.isArray(taskQuestion.options.ids)) {
+                            answerPayload.answer = taskQuestion.options.ids;
+                        }
+                        break;
+                    default:
+                        if (taskQuestion.options && typeof taskQuestion.options === 'object') {
+                            answerPayload.answer = Object.fromEntries(
+                                Object.keys(taskQuestion.options).map(optionId => {
+                                    const optionData = taskQuestion.options[optionId];
+                                    const answerValue = (optionData && optionData.answer !== undefined) ? optionData.answer : false;
+                                    return [optionId, answerValue];
+                                })
+                            );
+                        }
+                        break;
                 }
-                return await withTimeout(callback(), CONFIG.TIMEOUT);
-            } catch (error) {
-                logMessage('ERROR', `[${modelName}] Tentativa ${attempt + 1}/${retries + 1} falhou: ${error.message}`);
-                const isCorsError = error instanceof TypeError && error.message.toLowerCase().includes('fetch');
-                const isTimeoutError = error.message.toLowerCase().includes('timeout');
-
-                if (isCorsError || isTimeoutError || attempt === retries) {
-                     if (isCorsError) logMessage('ERROR', `[${modelName}] Falha de Rede/CORS. Não é possível continuar esta requisição.`);
-                     else if (isTimeoutError) logMessage('ERROR', `[${modelName}] Timeout atingido.`);
-                     else logMessage('ERROR', `[${modelName}] Máximo de tentativas atingido. Falhando requisição.`);
-                    throw error;
-                }
-
-                let delay;
-                const isRateLimitError = error.message.includes('429') || error.message.toLowerCase().includes('rate limit');
-                if (isRateLimitError) {
-                    if (!STATE.rateLimitActive) {
-                         logMessage('WARN', `[${modelName}] Rate limit (429) detectado! Ativando backoff global.`);
-                         STATE.rateLimitActive = true;
-                         if (STATE.rateLimitTimeoutId) clearTimeout(STATE.rateLimitTimeoutId);
-                         STATE.rateLimitTimeoutId = setTimeout(() => {
-                             logMessage('INFO', 'Backoff global de rate limit desativado.');
-                             STATE.rateLimitActive = false;
-                             STATE.rateLimitTimeoutId = null;
-                             if (!STATE.isAnalyzing && document.getElementById('hck-analyze-btn')) {
-                                 const btn = document.getElementById('hck-analyze-btn');
-                                 btn.disabled = false;
-                                 btn.textContent = `Analisar Questão`;
-                                 btn.style.backgroundColor = '#007AFF';
-                                 document.getElementById('hck-toggle-btn')?.style.setProperty('border-color', '#38383A');
-                             }
-                         }, 30000);
-                     }
-                    delay = CONFIG.API_RETRY_DELAY_BASE * CONFIG.API_RATE_LIMIT_DELAY_MULTIPLIER * (attempt + 1);
-                    logMessage('WARN', `[${modelName}] Rate limit. Aplicando backoff maior: ${delay}ms`);
-                } else {
-                    delay = CONFIG.API_RETRY_DELAY_BASE * (attempt + 1);
-                    logMessage('INFO', `[${modelName}] Aplicando backoff padrão: ${delay}ms`);
-                }
-                await new Promise(resolve => setTimeout(resolve, delay));
+                novoJson.answers[questionId] = answerPayload;
+            } catch (err) {
+                console.error(`[HCK TAREFAS] Erro ao processar questão ID ${questionId}, tipo ${taskQuestion.type}:`, err);
+                sendToast(`Erro processando questão ${questionId}. Ver console.`, 5000);
+                continue;
             }
         }
-         throw new Error(`[${modelName}] FetchWithRetry falhou após ${retries + 1} tentativas.`);
+        return novoJson;
     }
 
-    function getNextApiKey() {
-        if (!CONFIG.API_KEYS_GEMINI || CONFIG.API_KEYS_GEMINI.length === 0 || !CONFIG.API_KEYS_GEMINI[0]) {
-             const msg = 'CRÍTICO: Nenhuma chave de API configurada! Impossível contatar a API.';
-             logMessage('ERROR', msg);
-             throw new Error('Nenhuma chave de API disponível');
-        }
-        if (CONFIG.API_KEYS_GEMINI.length === 1) {
-            logMessage('WARN', 'Apenas uma chave de API configurada. Rotação inativa.');
-        }
-        const key = CONFIG.API_KEYS_GEMINI[STATE.currentApiKeyIndex];
-        const keyIdentifier = `Chave #${STATE.currentApiKeyIndex + 1}/${CONFIG.API_KEYS_GEMINI.length} (...${key.slice(-4)})`;
-        logMessage('DEBUG', `Usando API ${keyIdentifier}`);
-        STATE.currentApiKeyIndex = (STATE.currentApiKeyIndex + 1) % CONFIG.API_KEYS_GEMINI.length;
-        return key;
-    }
-
-    async function fetchImageAsBase64(url) {
-        if (STATE.imageCache[url]) {
-            logMessage('DEBUG', `Usando imagem cacheada: ${url.substring(0, 60)}...`);
-            return STATE.imageCache[url];
-        }
-        logMessage('INFO', `Buscando imagem via fetch(): ${url.substring(0, 80)}...`);
+    async function pegarRespostasCorretas(taskId, answerId, headers) {
+        const url = `https://edusp-api.ip.tv/tms/task/${taskId}/answer/${answerId}?with_task=true&with_genre=true&with_questions=true&with_assessed_skills=true`;
+        sendToast("Buscando respostas corretas...", 2000);
         try {
-            const response = await fetch(url, { method: 'GET', mode: 'cors', credentials: 'omit' });
-
+            const response = await fetch(url, { method: "GET", headers: headers });
             if (!response.ok) {
-                logMessage('ERROR', `Erro HTTP ${response.status} ao buscar imagem: ${url}`);
-                throw new Error(`Image HTTP ${response.status}`);
+                console.error(`[HCK TAREFAS] Erro ${response.status} ao buscar respostas. URL: ${url}`);
+                throw new Error(`Erro ${response.status} ao buscar respostas.`);
             }
-
-            const arrayBuffer = await response.arrayBuffer();
-            const bytes = new Uint8Array(arrayBuffer);
-            if (bytes.length === 0) throw new Error("Buffer de imagem vazio");
-
-            const base64 = window.btoa(bytes.reduce((a, b) => a + String.fromCharCode(b), ''));
-
-            if (bytes.length < 5 * 1024 * 1024) {
-               STATE.imageCache[url] = base64;
-               logMessage('DEBUG', `Imagem cacheada: ${url.substring(0, 60)}... Tam: ${Math.round(bytes.length / 1024)}KB`);
-            } else {
-               logMessage('WARN', `Imagem não cacheada (> 5MB): ${url.substring(0, 60)}...`);
-            }
-            return base64;
-
+            const data = await response.json();
+            return data;
         } catch (error) {
-             if (error instanceof TypeError && error.message.toLowerCase().includes('fetch')) {
-                 logMessage('ERROR', `Falha de Fetch/CORS na imagem: ${url.substring(0, 60)}... ${error.message}`);
-                 throw new Error(`Falha Fetch/CORS Imagem: ${error.message}`);
-             } else {
-                 logMessage('ERROR', `Erro ao processar imagem: ${url.substring(0, 60)}... ${error.message}`);
-                 throw new Error(`Falha Processamento Imagem: ${error.message}`);
-             }
-        }
-    }
-
-    function extractImages() {
-        logMessage('DEBUG', "Extraindo URLs de imagem da página...");
-        const urls = new Set();
-        document.querySelectorAll('img[src], [style*="background-image"], [data-image], .card-img-top, .questao-imagem').forEach(el => {
-            let src = null;
-            try {
-                if (el.tagName === 'IMG' && el.src) src = el.src;
-                else if (el.dataset.image) src = el.dataset.image;
-                else if (el.style.backgroundImage) { const m = el.style.backgroundImage.match(/url\("?(.+?)"?\)/); if (m && m[1]) src = m[1]; }
-
-                if (src) {
-                    const absUrl = new URL(src, window.location.href).toString();
-                    // A validação agora acontece DENTRO do IMAGE_FILTERS.verify
-                    if (IMAGE_FILTERS.verify(absUrl)) {
-                        urls.add(absUrl);
-                    }
-                    // O log de bloqueio/permissão já acontece dentro do verify
-                }
-            } catch (e) { logMessage('WARN', `Erro ao processar URL de imagem: ${src || 'desconhecido'}. ${e.message}`); }
-        });
-        STATE.images = Array.from(urls).slice(0, 10);
-        logMessage('INFO', `Extração concluída. ${STATE.images.length} imagens válidas e permitidas encontradas.`);
-        return STATE.images;
-    }
-
-    async function queryGemini(modelInfo, prompt) {
-        const { id: modelId, name: modelName } = modelInfo;
-        const apiKeyToUse = getNextApiKey();
-        const apiUrl = `${CONFIG.GEMINI_API_BASE_URL}${modelId}:generateContent?key=${apiKeyToUse}`;
-        const requestPayload = JSON.stringify(prompt);
-
-        logMessage('INFO', `[${modelName}] Consultando API via fetch() (Chave: ...${apiKeyToUse.slice(-4)})`);
-        logMessage('DEBUG', `[${modelName}] Início Texto Prompt:`, prompt.contents[0].parts[0].text.substring(0, 150) + "...");
-
-        try {
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'User-Agent': `BrowserBookmarklet/HCK-${SCRIPT_VERSION}` },
-                body: requestPayload, mode: 'cors', credentials: 'omit'
-            });
-
-            logMessage('DEBUG', `[${modelName}] Status Resposta: ${response.status}`);
-
-            if (response.status === 429) {
-                logMessage('WARN', `[${modelName}] Rate Limit (429)! Acionando backoff.`);
-                throw new Error(`API Rate Limit (429)`);
-            }
-
-            let data;
-            try {
-                 const responseText = await response.text();
-                 if (!responseText) {
-                    if (!response.ok) throw new Error(`API Error ${response.status}: ${response.statusText || 'Empty Response Body'}`);
-                    data = {};
-                 } else {
-                    data = JSON.parse(responseText);
-                 }
-            } catch (jsonError) {
-                 if (!response.ok) {
-                    logMessage('ERROR', `[${modelName}] Erro API ${response.status} ${response.statusText}. Falha ao parsear corpo JSON.`);
-                    throw new Error(`API Error ${response.status}: ${response.statusText || 'Unknown API Error'} (JSON Parse Failed)`);
-                 }
-                 logMessage('ERROR', `[${modelName}] Falha ao parsear JSON (Status ${response.status}): ${jsonError.message}`);
-                 throw new Error(`Falha Parse JSON Resposta: ${jsonError.message}`);
-            }
-
-            if (!response.ok) {
-                const errorMsg = data?.error?.message || response.statusText || 'Erro API Desconhecido';
-                logMessage('ERROR', `[${modelName}] Erro HTTP API ${response.status}: ${errorMsg}. Detalhes:`, data?.error?.details);
-                throw new Error(`API Error ${response.status}: ${errorMsg}`);
-            }
-
-            if (data.promptFeedback?.blockReason) {
-                logMessage('WARN', `[${modelName}] API Bloqueou Prompt. Razão: ${data.promptFeedback.blockReason}. Ratings:`, data.promptFeedback.safetyRatings);
-                throw new Error(`API Bloqueou Prompt (${data.promptFeedback.blockReason})`);
-            }
-
-            const candidate = data.candidates?.[0];
-            const text = candidate?.content?.parts?.[0]?.text;
-
-            if (text) {
-                logMessage('INFO', `[${modelName}] Resposta Bruta: "${text}"`);
-                return text;
-            } else {
-                const finishReason = candidate?.finishReason || data.promptFeedback?.blockReason || 'Sem Texto/Razão Desconhecida';
-                const safetyRatings = candidate?.safetyRatings;
-                logMessage('WARN', `[${modelName}] Sem texto na resposta OK. Razão Finalização: ${finishReason}. Safety:`, safetyRatings);
-                throw new Error(`API Sem Texto (${finishReason})`);
-            }
-
-        } catch (error) {
-            if (error instanceof TypeError && error.message.toLowerCase().includes('fetch')) {
-                 logMessage('ERROR', `[${modelName}] Erro Fetch/CORS API: ${error.message}`);
-                 throw new Error(`Falha Fetch/CORS API: ${error.message}`);
-             }
-            logMessage('ERROR', `[${modelName}] Falha Requisição/Processamento API: ${error.message}`);
+            console.error("[HCK TAREFAS] Falha detalhada ao buscar respostas corretas:", error);
+            sendToast(`Erro ao buscar respostas: ${error.message}`, 5000);
             throw error;
         }
     }
 
-    function formatResponse(answer) {
-        if (typeof answer !== 'string') return null;
-        const trimmed = answer.trim();
-        if (/^[A-E]$/i.test(trimmed)) {
-             logMessage('DEBUG', `Formatando "${answer}" -> Letra única exata: "${trimmed.toUpperCase()}"`);
-             return trimmed.toUpperCase();
-        }
-        const match = trimmed.match(/(?:^|\s|:|\(|\[|"|'|\b)([A-E])(?:\s|\.|,|\)|\]|"|'|\b|$)/i);
-        if (match && match[1]) {
-            const formatted = match[1].toUpperCase();
-             logMessage('DEBUG', `Formatando "${answer}" -> Letra extraída: "${formatted}"`);
-            return formatted;
-        }
-        logMessage('WARN', `Falha ao formatar resposta: "${answer}". Não corresponde ao formato A-E esperado.`);
-        return null;
-    }
+    async function enviarRespostasCorrigidas(respostasAnteriores, taskId, answerId, headers) {
+        const url = `https://edusp-api.ip.tv/tms/task/${taskId}/answer/${answerId}`;
+        try {
+            const novasRespostasPayload = transformJson(respostasAnteriores);
+            sendToast("Enviando respostas corrigidas...", 2000);
 
-     function determineConsensus(results) {
-        logMessage('INFO', 'Determinando consenso...');
-        const validAnswers = {};
-        let errors = 0;
-        let failedModelDetails = [];
-        let corsFailure = false;
-        let rateLimitFailure = false;
+            const response = await fetch(url, {
+                method: "PUT",
+                headers: headers,
+                body: JSON.stringify(novasRespostasPayload)
+            });
 
-        results.forEach((result, index) => {
-            const modelName = CONFIG.MODELS[index]?.name || `Modelo ${index + 1}`;
-            if (result.status === 'fulfilled') {
-                const formatted = formatResponse(result.value);
-                if (formatted) {
-                    validAnswers[formatted] = (validAnswers[formatted] || 0) + 1;
-                    logMessage('INFO', `[${modelName}] Votou: ${formatted}`);
-                } else {
-                    logMessage('WARN', `[${modelName}] Formato inválido: "${result.value}"`);
-                    errors++;
-                    failedModelDetails.push({ name: modelName, reason: 'Formato Inválido' });
-                }
-            } else {
-                const reason = result.reason?.message || result.reason?.toString() || 'Erro Desconhecido';
-                logMessage('ERROR', `[${modelName}] Requisição Falhou: ${reason}`);
-                errors++;
-                failedModelDetails.push({ name: modelName, reason: `Falha (${reason.substring(0, 50)}...)` });
-                 if (reason.toLowerCase().includes('cors') || reason.toLowerCase().includes('failed to fetch')) {
-                    corsFailure = true;
-                 }
-                 if (reason.toLowerCase().includes('rate limit') || reason.includes('429')) {
-                     rateLimitFailure = true;
-                 }
+            if (!response.ok) {
+                let errorBody = await response.text();
+                console.error(`[HCK TAREFAS] Erro ${response.status} no PUT. URL: ${url}. Response Body:`, errorBody);
+                try { errorBody = JSON.parse(errorBody); } catch (e) {}
+                throw new Error(`Erro ${response.status} ao enviar respostas.`);
             }
-        });
 
-        const numModelsQueried = results.length;
-        const numSuccessfulVotes = Object.values(validAnswers).reduce((sum, count) => sum + count, 0);
-        const majorityThreshold = Math.ceil(numModelsQueried / 2);
-        logMessage('DEBUG', `Estatísticas Consenso: Modelos=${numModelsQueried}, VotosVálidos=${numSuccessfulVotes}, Erros=${errors}, LimiarMaioria=${majorityThreshold}`);
+            sendToast("Tarefa corrigida com sucesso!", 5000);
+            STATE.stats.totalCorrected++;
+            
+            // Adiciona à lista de tarefas corrigidas
+            STATE.correctedTasks.push({
+                taskId,
+                answerId,
+                timestamp: new Date().toISOString(),
+                status: 'success'
+            });
+            
+            // Atualiza a UI se estiver visível
+            updateStatsDisplay();
+            updateCorrectedTasksList();
 
-         if (corsFailure && numSuccessfulVotes === 0) {
-             logMessage('ERROR', `Consenso Falhou: Requisições API bloqueadas por CORS/Rede.`);
-             return { answer: "Falha Rede/CORS", detail: "(API bloqueada)", type: 'error' };
-         }
-         if (rateLimitFailure && numSuccessfulVotes === 0) {
-             logMessage('ERROR', `Consenso Falhou: Rate limit atingido em todas as tentativas.`);
-             return { answer: "Falha Rate Limit", detail: "(Tente mais tarde)", type: 'error' };
-         }
-        if (numSuccessfulVotes === 0) {
-            const failureSummary = failedModelDetails.map(f => `${f.name}: ${f.reason}`).join('; ') || 'Nenhuma resposta válida';
-            logMessage('ERROR', `Consenso Falhou: Nenhuma resposta válida. Falhas: ${failureSummary}`);
-            return { answer: "Falha Total", detail: `(${failureSummary.substring(0, 80)}...)`, type: 'error' };
+            const oldTitle = document.title;
+            document.title = `${SCRIPT_NAME} Fez a Boa!`;
+            setTimeout(() => { document.title = oldTitle; }, 3000);
+
+        } catch (error) {
+            console.error("[HCK TAREFAS] Falha detalhada ao transformar ou enviar respostas corrigidas:", error);
+            sendToast(`Erro na correção: ${error.message}`, 5000);
+            STATE.stats.totalFailed++;
+            
+            // Adiciona à lista de tarefas com falha
+            STATE.correctedTasks.push({
+                taskId,
+                answerId,
+                timestamp: new Date().toISOString(),
+                status: 'failed',
+                error: error.message
+            });
+            
+            // Atualiza a UI se estiver visível
+            updateStatsDisplay();
+            updateCorrectedTasksList();
         }
-
-        const sortedVotes = Object.entries(validAnswers).sort(([, v1], [, v2]) => v2 - v1);
-        const topAnswer = sortedVotes[0][0];
-        const topVotes = sortedVotes[0][1];
-        const totalValidModels = numModelsQueried - errors;
-
-        if (topVotes >= majorityThreshold && totalValidModels > 0) {
-             const detail = (topVotes === totalValidModels) ? `(Consenso ${topVotes}/${totalValidModels})` : `(Maioria ${topVotes}/${totalValidModels})`;
-            logMessage('INFO', `Consenso Atingido: ${topAnswer} ${detail}`);
-            return { answer: topAnswer, detail: detail, type: 'success' };
-        } else {
-            const tie = sortedVotes.length > 1 && sortedVotes[1][1] === topVotes;
-            if (tie) {
-                const tieDetail = sortedVotes.filter(v => v[1] === topVotes).map(([a,v]) => `${a}:${v}`).join(', ');
-                logMessage('WARN', `Consenso Ambíguo (Empate, Sem Maioria): ${tieDetail}`);
-                return { answer: "Ambíguo", detail: `(${tieDetail})`, type: 'warn' };
-            } else {
-                 const failureSummary = failedModelDetails.length > 0 ? ` | Falhas: ${failedModelDetails.map(f => f.name).join(', ')}` : '';
-                 const detail = `(${topAnswer}:${topVotes}/${totalValidModels > 0 ? totalValidModels : numModelsQueried} - Sem Maioria${failureSummary})`;
-                logMessage('WARN', `Consenso Inconclusivo (Voto Minoritário): ${topAnswer} ${detail}`);
-                return { answer: topAnswer, detail: detail.substring(0, 80) + (detail.length > 80 ? '...)' : ''), type: 'warn' };
-            }
-        }
-    }
-
-     async function buildPrompt(question, imageUrls) {
-        logMessage('INFO', `Construindo prompt (${imageUrls.length} imagens detectadas)...`);
-        const imageParts = [];
-        let imageFetchErrors = 0;
-        const imageFetchPromises = imageUrls.map(async (url) => {
-            try {
-                const base64 = await fetchImageAsBase64(url);
-                let mime = 'image/jpeg';
-                if (/\.png$/i.test(url)) mime = 'image/png';
-                else if (/\.webp$/i.test(url)) mime = 'image/webp';
-                else if (/\.gif$/i.test(url)) mime = 'image/gif';
-                 else if (/\.jpe?g$/i.test(url)) mime = 'image/jpeg';
-                imageParts.push({ inlineData: { mimeType: mime, data: base64 } });
-            } catch (e) {
-                imageFetchErrors++;
-                logMessage('WARN', `Falha ao buscar/processar imagem, pulando: ${url.substring(0,60)}... (${e.message})`);
-            }
-        });
-
-        await Promise.allSettled(imageFetchPromises);
-        logMessage('DEBUG', `Incluídas ${imageParts.length} imagens no payload. ${imageFetchErrors} falharam (provável CORS/Rede).`);
-
-        const promptText = `CONTEXTO: Questão de múltipla escolha (Alternativas A, B, C, D, E).
-OBJETIVO: Identificar a ÚNICA alternativa CORRETA.
-INSTRUÇÕES MUITO IMPORTANTES:
-1. ANÁLISE INTERNA: Pense passo a passo para encontrar a resposta (NÃO MOSTRE ESTE RACIOCÍNIO NA SAÍDA). Analise o texto da questão E TODAS as imagens fornecidas.
-2. RESPOSTA FINAL: Retorne APENAS e SOMENTE a LETRA MAIÚSCULA da alternativa correta.
-3. FORMATO ESTRITO: A resposta DEVE ser UMA ÚNICA LETRA: A, B, C, D ou E.
-4. NÃO INCLUA NADA MAIS: Sem texto adicional, sem explicações, sem pontuação (sem ".", ",", etc.), sem markdown, sem numeração, sem frases como "A resposta é:". APENAS A LETRA.
-5. SE INCERTO: Mesmo se não tiver 100% de certeza, escolha a alternativa MAIS PROVÁVEL e retorne apenas a letra correspondente.
-
-QUESTÃO:
- ${question}
- ${imageParts.length > 0 ? '\nIMAGENS (Analise cuidadosamente):\n' : (imageFetchErrors > 0 ? '\n(AVISO: Algumas ou todas as imagens não puderam ser carregadas/incluídas na análise devido a erros de rede/CORS)\n' : '\n(Nenhuma imagem relevante detectada ou fornecida)\n')}`;
-
-        logMessage('DEBUG', "Texto do prompt gerado.");
-
-        const safetySettings = [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: CONFIG.SAFETY_SETTINGS_THRESHOLD },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: CONFIG.SAFETY_SETTINGS_THRESHOLD },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: CONFIG.SAFETY_SETTINGS_THRESHOLD },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: CONFIG.SAFETY_SETTINGS_THRESHOLD },
-        ];
-
-        return {
-            contents: [{ parts: [{ text: promptText }, ...imageParts] }],
-            generationConfig: {
-                temperature: CONFIG.TEMPERATURE,
-                topP: CONFIG.TOP_P,
-                maxOutputTokens: CONFIG.MAX_OUTPUT_TOKENS,
-            },
-            safetySettings: safetySettings
-        };
     }
 
     function setupUI() {
-        logMessage('INFO','Configurando UI (iOS Refined Bookmarklet)...');
+        logMessage('INFO','Configurando UI para HCK TAREFAS...');
         try {
             const fontLink = document.createElement('link'); 
             fontLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap'; 
@@ -622,38 +356,36 @@ QUESTÃO:
         };
         
         const getResponsiveSize = () => ({ 
-            menuWidth: (window.innerWidth < 768 ? '200px' : '220px'), 
+            menuWidth: (window.innerWidth < 768 ? '280px' : '320px'), 
             fontSize: (window.innerWidth < 768 ? '13px' : '14px'), 
             buttonPadding: '9px 10px', 
-            textareaHeight: '45px', 
             titleSize: '16px' 
         });
         
         const container = document.createElement('div'); 
-        container.id = 'hck-ui-bookmarklet';
+        container.id = 'hck-tarefas-ui-bookmarklet';
         container.style.cssText = `position: fixed; bottom: 12px; right: 12px; z-index: 10000; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; line-height: 1.4;`;
         
         const toggleBtn = document.createElement('button'); 
-        toggleBtn.id = 'hck-toggle-btn'; 
-        toggleBtn.textContent = 'HCK'; 
+        toggleBtn.id = 'hck-tarefas-toggle-btn'; 
+        toggleBtn.textContent = 'TAREFAS'; 
         toggleBtn.style.cssText = `background: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; padding: 8px 18px; border: 1px solid ${estilo.cores.borda}; border-radius: 22px; cursor: pointer; font-weight: 600; font-size: 15px; box-shadow: ${estilo.sombras.botao}; display: block; transition: all 0.35s ease-out; width: auto; min-width: 70px; text-align: center;`;
         
         const sizes = getResponsiveSize();
         const menu = document.createElement('div'); 
-        menu.id = 'hck-menu'; 
+        menu.id = 'hck-tarefas-menu'; 
         menu.style.cssText = `background: ${estilo.cores.fundo}; width: ${sizes.menuWidth}; padding: 10px; border-radius: ${estilo.radius}; box-shadow: ${estilo.sombras.menu}; display: none; flex-direction: column; gap: 8px; border: 1px solid ${estilo.cores.borda}; opacity: 0; transform: translateY(15px) scale(0.95); transition: opacity 0.35s ease-out, transform 0.35s ease-out; position: relative; margin-bottom: 8px; max-height: 75vh; overflow-y: auto; scrollbar-width: none;`;
         
         // Adicionando estilo para scrollbar do menu
         const style = document.createElement('style');
-        style.textContent = `#hck-menu::-webkit-scrollbar { display: none; }`;
+        style.textContent = `#hck-tarefas-menu::-webkit-scrollbar { display: none; }`;
         document.head.appendChild(style);
         
         const header = document.createElement('div'); 
         header.style.cssText = `display: flex; align-items: center; justify-content: center; position: relative; width: 100%; margin-bottom: 4px;`;
         
-        // --- TÍTULO DO MENU ATUALIZADO ---
         const title = document.createElement('div'); 
-        title.textContent = 'HCK'; 
+        title.textContent = SCRIPT_NAME; 
         title.style.cssText = `font-size: ${sizes.titleSize}; font-weight: 600; text-align: center; flex-grow: 1; color: ${estilo.cores.texto};`;
         
         const closeBtn = document.createElement('button'); 
@@ -663,31 +395,52 @@ QUESTÃO:
         
         header.append(title, closeBtn);
         
-        const input = document.createElement('textarea'); 
-        input.id = 'hck-question-input'; 
-        input.placeholder = 'Cole a questão aqui...'; 
-        input.setAttribute('rows', '2'); 
-        input.style.cssText = `width: 100%; min-height: ${sizes.textareaHeight}; padding: 8px; margin-bottom: 0; border: 1px solid ${estilo.cores.borda}; border-radius: ${estilo.radiusSmall}; resize: vertical; font-size: ${sizes.fontSize}; font-family: inherit; box-sizing: border-box; background: ${estilo.cores.fundoTerciario}; color: ${estilo.cores.texto}; transition: border-color 0.2s ease, box-shadow 0.2s ease;`;
+        // Status Section
+        const statusSection = document.createElement('div');
+        statusSection.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; margin-bottom: 8px;`;
         
-        // Adicionando estilos para placeholder e focus
-        const style2 = document.createElement('style');
-        style2.textContent = `
-            #hck-question-input::placeholder { color: ${estilo.cores.textoSecundario}; }
-            #hck-question-input:focus { outline: none; border-color: ${estilo.cores.accentBg}; box-shadow: 0 0 0 1px ${estilo.cores.accentBg}80; }
-        `;
-        document.head.appendChild(style2);
+        const statusTitle = document.createElement('div');
+        statusTitle.textContent = 'Status';
+        statusTitle.style.cssText = `font-size: 12px; font-weight: 600; color: ${estilo.cores.textoSecundario}; margin-bottom: 4px;`;
         
-        const imagesContainer = document.createElement('div'); 
-        imagesContainer.id = 'hck-images-container'; 
-        imagesContainer.style.cssText = `max-height: 60px; overflow-y: auto; margin-bottom: 0; font-size: calc(${sizes.fontSize} - 2px); border: 1px solid ${estilo.cores.borda}; border-radius: ${estilo.radiusSmall}; padding: 6px 8px; background: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; scrollbar-width: none;`;
+        const statusContent = document.createElement('div');
+        statusContent.id = 'status-content';
+        statusContent.style.cssText = `font-size: ${sizes.fontSize}; color: ${estilo.cores.texto};`;
+        statusContent.innerHTML = `<div style="display: flex; justify-content: space-between; margin-bottom: 4px;"><span>Script:</span><span id="script-status" style="color: ${STATE.isActive ? estilo.cores.sucesso : estilo.cores.erro};">${STATE.isActive ? 'Ativo' : 'Inativo'}</span></div><div style="display: flex; justify-content: space-between; margin-bottom: 4px;"><span>Interceptação:</span><span id="intercept-status" style="color: ${STATE.interceptEnabled ? estilo.cores.sucesso : estilo.cores.erro};">${STATE.interceptEnabled ? 'Ativa' : 'Inativa'}</span></div><div style="display: flex; justify-content: space-between;"><span>Token:</span><span id="token-status" style="color: ${STATE.capturedLoginData ? estilo.cores.sucesso : estilo.cores.warn};">${STATE.capturedLoginData ? 'Capturado' : 'Não capturado'}</span></div>`;
         
-        // Adicionando estilo para scrollbar do imagesContainer
-        const style3 = document.createElement('style');
-        style3.textContent = `#hck-images-container::-webkit-scrollbar { display: none; }`;
-        document.head.appendChild(style3);
+        statusSection.append(statusTitle, statusContent);
         
-        imagesContainer.innerHTML = `<div style="text-align: center; padding: 1px; font-size: 0.9em;">Nenhuma imagem detectada</div>`;
+        // Stats Section
+        const statsSection = document.createElement('div');
+        statsSection.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; margin-bottom: 8px;`;
         
+        const statsTitle = document.createElement('div');
+        statsTitle.textContent = 'Estatísticas';
+        statsTitle.style.cssText = `font-size: 12px; font-weight: 600; color: ${estilo.cores.textoSecundario}; margin-bottom: 4px;`;
+        
+        const statsContent = document.createElement('div');
+        statsContent.id = 'stats-content';
+        statsContent.style.cssText = `font-size: ${sizes.fontSize}; color: ${estilo.cores.texto};`;
+        statsContent.innerHTML = `<div style="display: flex; justify-content: space-between; margin-bottom: 4px;"><span>Interceptadas:</span><span id="total-intercepted">0</span></div><div style="display: flex; justify-content: space-between; margin-bottom: 4px;"><span>Corrigidas:</span><span id="total-corrected" style="color: ${estilo.cores.sucesso};">0</span></div><div style="display: flex; justify-content: space-between;"><span>Falhas:</span><span id="total-failed" style="color: ${estilo.cores.erro};">0</span></div>`;
+        
+        statsSection.append(statsTitle, statsContent);
+        
+        // Tasks List Section
+        const tasksSection = document.createElement('div');
+        tasksSection.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; margin-bottom: 8px; max-height: 150px; overflow-y: auto;`;
+        
+        const tasksTitle = document.createElement('div');
+        tasksTitle.textContent = 'Tarefas Recentes';
+        tasksTitle.style.cssText = `font-size: 12px; font-weight: 600; color: ${estilo.cores.textoSecundario}; margin-bottom: 4px;`;
+        
+        const tasksContent = document.createElement('div');
+        tasksContent.id = 'tasks-content';
+        tasksContent.style.cssText = `font-size: ${sizes.fontSize}; color: ${estilo.cores.texto};`;
+        tasksContent.innerHTML = `<div style="text-align: center; color: ${estilo.cores.textoSecundario}; font-size: 12px;">Nenhuma tarefa processada ainda</div>`;
+        
+        tasksSection.append(tasksTitle, tasksContent);
+        
+        // Buttons
         const buttonBaseStyle = `width: 100%; padding: ${sizes.buttonPadding}; border: none; border-radius: ${estilo.radiusSmall}; cursor: pointer; font-size: ${sizes.fontSize}; font-weight: 500; margin-bottom: 0; display: flex; align-items: center; justify-content: center; gap: 6px; transition: opacity 0.2s ease, background-color 0.2s ease, color 0.2s ease;`;
         const buttonPrimaryStyle = `${buttonBaseStyle} background: ${estilo.cores.accentBg}; color: ${estilo.cores.accent};`;
         const buttonSecondaryStyle = `${buttonBaseStyle} background: ${estilo.cores.secondaryAccentBg}; color: ${estilo.cores.secondaryAccent}; border: 1px solid ${estilo.cores.borda};`;
@@ -695,55 +448,100 @@ QUESTÃO:
         // Adicionando estilos para hover e disabled
         const style4 = document.createElement('style');
         style4.textContent = `
-            .hck-btn-primary:hover { opacity: 0.85; }
-            .hck-btn-primary:disabled { background-color: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; opacity: 0.6; cursor: not-allowed; }
-            .hck-btn-secondary:hover { background: ${estilo.cores.fundoTerciario}; opacity: 1; }
+            .hck-tarefas-btn-primary:hover { opacity: 0.85; }
+            .hck-tarefas-btn-primary:disabled { background-color: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; opacity: 0.6; cursor: not-allowed; }
+            .hck-tarefas-btn-secondary:hover { background: ${estilo.cores.fundoTerciario}; opacity: 1; }
         `;
         document.head.appendChild(style4);
         
-        const updateImagesBtn = document.createElement('button'); 
-        updateImagesBtn.textContent = `Atualizar Imagens`; 
-        updateImagesBtn.className = 'hck-btn-secondary';
-        updateImagesBtn.style.cssText = buttonSecondaryStyle;
+        const toggleInterceptBtn = document.createElement('button'); 
+        toggleInterceptBtn.textContent = `${STATE.interceptEnabled ? 'Desativar' : 'Ativar'} Interceptação`; 
+        toggleInterceptBtn.className = 'hck-tarefas-btn-primary';
+        toggleInterceptBtn.style.cssText = buttonPrimaryStyle;
         
-        const analyzeBtn = document.createElement('button'); 
-        analyzeBtn.id = 'hck-analyze-btn'; 
-        analyzeBtn.textContent = `Analisar Questão`; 
-        analyzeBtn.className = 'hck-btn-primary';
-        analyzeBtn.style.cssText = buttonPrimaryStyle;
-        
-        const clearBtn = document.createElement('button'); 
-        clearBtn.textContent = `Limpar Tudo`; 
-        clearBtn.className = 'hck-btn-secondary';
-        clearBtn.style.cssText = buttonSecondaryStyle;
+        const clearDataBtn = document.createElement('button'); 
+        clearDataBtn.textContent = 'Limpar Dados'; 
+        clearDataBtn.className = 'hck-tarefas-btn-secondary';
+        clearDataBtn.style.cssText = buttonSecondaryStyle;
         
         const logsBtn = document.createElement('button'); 
-        logsBtn.textContent = `Ver Logs`; 
-        logsBtn.className = 'hck-btn-secondary';
+        logsBtn.textContent = 'Ver Logs'; 
+        logsBtn.className = 'hck-tarefas-btn-secondary';
         logsBtn.style.cssText = buttonSecondaryStyle;
         
-        // --- FORMATAÇÃO DOS CRÉDITOS ATUALIZADA ---
+        // Credits
         const credits = document.createElement('div');
         credits.innerHTML = `<span style="font-weight: 600; letter-spacing: 0.5px;">v${SCRIPT_VERSION}</span> <span style="margin: 0 4px;">|</span> <span style="opacity: 0.7;">by Hackermoon</span>`;
         credits.style.cssText = `text-align: center; font-size: 10px; font-weight: 500; color: ${estilo.cores.textoSecundario}; margin-top: 8px; padding-top: 6px; border-top: 1px solid ${estilo.cores.borda}; opacity: 0.9;`;
         
         const notificationContainer = document.createElement('div'); 
-        notificationContainer.id = 'hck-notifications'; 
+        notificationContainer.id = 'hck-tarefas-notifications'; 
         notificationContainer.style.cssText = `position: fixed; bottom: 15px; left: 50%; transform: translateX(-50%); z-index: 10002; display: flex; flex-direction: column; align-items: center; gap: 10px; width: auto; max-width: 90%;`;
         
         STATE.notificationContainer = notificationContainer;
-        menu.append(header, input, updateImagesBtn, imagesContainer, analyzeBtn, clearBtn, logsBtn, credits);
+        menu.append(header, statusSection, statsSection, tasksSection, toggleInterceptBtn, clearDataBtn, logsBtn, credits);
         container.append(menu, toggleBtn);
         document.body.appendChild(container); 
         document.body.appendChild(notificationContainer);
         logMessage('INFO', 'Elementos da UI adicionados à página.');
 
-        logMessage('WARN', '--- ALERTA DE SEGURANÇA ---');
-        logMessage('WARN', 'As chaves de API estão incluídas diretamente no código deste bookmarklet.');
-        logMessage('WARN', 'Isto é INSEGURO. NÃO compartilhe se contiver chaves reais.');
-        logMessage('WARN', 'Considere remover as chaves ou usar um método mais seguro.');
-        logMessage('WARN', '--- FIM ALERTA SEGURANÇA ---');
+        // Funções para atualizar a UI
+        function updateStatusDisplay() {
+            const scriptStatus = document.getElementById('script-status');
+            const interceptStatus = document.getElementById('intercept-status');
+            const tokenStatus = document.getElementById('token-status');
+            
+            if (scriptStatus) {
+                scriptStatus.textContent = STATE.isActive ? 'Ativo' : 'Inativo';
+                scriptStatus.style.color = STATE.isActive ? estilo.cores.sucesso : estilo.cores.erro;
+            }
+            
+            if (interceptStatus) {
+                interceptStatus.textContent = STATE.interceptEnabled ? 'Ativa' : 'Inativa';
+                interceptStatus.style.color = STATE.interceptEnabled ? estilo.cores.sucesso : estilo.cores.erro;
+            }
+            
+            if (tokenStatus) {
+                tokenStatus.textContent = STATE.capturedLoginData ? 'Capturado' : 'Não capturado';
+                tokenStatus.style.color = STATE.capturedLoginData ? estilo.cores.sucesso : estilo.cores.warn;
+            }
+        }
+        
+        function updateStatsDisplay() {
+            const totalIntercepted = document.getElementById('total-intercepted');
+            const totalCorrected = document.getElementById('total-corrected');
+            const totalFailed = document.getElementById('total-failed');
+            
+            if (totalIntercepted) totalIntercepted.textContent = STATE.stats.totalIntercepted;
+            if (totalCorrected) totalCorrected.textContent = STATE.stats.totalCorrected;
+            if (totalFailed) totalFailed.textContent = STATE.stats.totalFailed;
+        }
+        
+        function updateCorrectedTasksList() {
+            const tasksContent = document.getElementById('tasks-content');
+            if (!tasksContent) return;
+            
+            if (STATE.correctedTasks.length === 0) {
+                tasksContent.innerHTML = `<div style="text-align: center; color: ${estilo.cores.textoSecundario}; font-size: 12px;">Nenhuma tarefa processada ainda</div>`;
+                return;
+            }
+            
+            // Mostra apenas as 5 tarefas mais recentes
+            const recentTasks = STATE.correctedTasks.slice(-5).reverse();
+            tasksContent.innerHTML = recentTasks.map(task => {
+                const time = new Date(task.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const statusColor = task.status === 'success' ? estilo.cores.sucesso : estilo.cores.erro;
+                const statusText = task.status === 'success' ? 'Sucesso' : 'Falha';
+                return `<div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px;"><span>Tarefa ${task.taskId}</span><span style="color: ${statusColor};">${statusText} (${time})</span></div>`;
+            }).join('');
+        }
+        
+        // Expondo as funções globalmente para uso em outras partes do código
+        window.updateStatusDisplay = updateStatusDisplay;
+        window.updateStatsDisplay = updateStatsDisplay;
+        window.updateCorrectedTasksList = updateCorrectedTasksList;
 
+        // Menu toggle
         const toggleMenu = (show) => { 
             const duration = 350; 
             if (show) { 
@@ -774,6 +572,7 @@ QUESTÃO:
         toggleBtn.addEventListener('click', () => toggleMenu(true)); 
         closeBtn.addEventListener('click', () => toggleMenu(false));
         
+        // Logs modal
         const hideLogs = () => { 
             if (STATE.logModal) { 
                 STATE.logModal.style.display = 'none'; 
@@ -791,103 +590,41 @@ QUESTÃO:
         window.addEventListener('resize', () => { 
             const s = getResponsiveSize(); 
             menu.style.width = s.menuWidth; 
-            input.style.minHeight = s.textareaHeight; 
-            input.style.fontSize = s.fontSize; 
-            [analyzeBtn, clearBtn, updateImagesBtn, logsBtn].forEach(b => { 
+            [toggleInterceptBtn, clearDataBtn, logsBtn].forEach(b => { 
                 b.style.fontSize = s.fontSize; 
                 b.style.padding = s.buttonPadding; 
             }); 
-            imagesContainer.style.fontSize = `calc(${s.fontSize} - 2px)`; 
             title.style.fontSize = s.titleSize; 
         });
 
-        const updateImageButtons = (images) => { 
-            if (!imagesContainer) return; 
-            if (images.length === 0) { 
-                imagesContainer.innerHTML = `<div style="text-align: center; padding: 1px; font-size: 0.9em; color: ${estilo.cores.textoSecundario};">Nenhuma imagem relevante</div>`; 
-                return; 
-            } 
-            imagesContainer.innerHTML = images.map((img, i) => `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 0; border-bottom: 1px solid ${estilo.cores.borda}; gap: 4px;">
-                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; color: ${estilo.cores.texto}; font-size:0.9em;" title="${img}">Imagem ${i + 1}</span>
-                    <button data-url="${img}" title="Copiar URL" style="background: ${estilo.cores.fundoTerciario}; color: ${estilo.cores.textoSecundario}; border: none; border-radius: 4px; padding: 1px 4px; font-size: 9px; cursor: pointer; white-space: nowrap; transition: all 0.2s ease; font-weight: 500;">Copiar</button>
-                </div>
-            `).join(''); 
-            
-            imagesContainer.querySelectorAll('button[data-url]').forEach(b => { 
-                b.addEventListener('mouseenter', () => b.style.backgroundColor = estilo.cores.borda); 
-                b.addEventListener('mouseleave', () => b.style.backgroundColor = estilo.cores.fundoTerciario); 
-                b.addEventListener('click', (e) => { 
-                    navigator.clipboard.writeText(e.target.dataset.url).then(() => { 
-                        e.target.textContent = 'Copiado!'; 
-                        setTimeout(() => { 
-                            e.target.textContent = 'Copiar'; 
-                        }, 1200); 
-                    }).catch(err => { 
-                        logMessage('ERROR', 'Falha ao copiar:', err); 
-                        e.target.textContent = 'Falha!'; 
-                        setTimeout(() => { 
-                            e.target.textContent = 'Copiar'; 
-                        }, 1500); 
-                    }); 
-                }); 
-            }); 
+        // Botão de ativar/desativar interceptação
+        toggleInterceptBtn.onclick = () => {
+            STATE.interceptEnabled = !STATE.interceptEnabled;
+            toggleInterceptBtn.textContent = STATE.interceptEnabled ? 'Desativar Interceptação' : 'Ativar Interceptação';
+            updateStatusDisplay();
+            sendToast(`Interceptação ${STATE.interceptEnabled ? 'ativada' : 'desativada'}`, 3000);
         };
-
-        const showResponse = (result, duration) => { 
-            if (!STATE.notificationContainer) { 
-                logMessage('ERROR', "Container de notificação não encontrado!"); 
-                return; 
-            } 
-            const { answer = "Info", detail = "", type = 'info' } = result || {}; 
-            let icon = 'ℹ️'; 
-            let titleText = answer; 
-            let detailText = detail; 
-            let effectiveDuration = duration || (type === 'error' || type === 'warn' ? CONFIG.NOTIFICATION_TIMEOUT_LONG : CONFIG.NOTIFICATION_TIMEOUT); 
-            
-            switch (type) { 
-                case 'success': icon = '✅'; break; 
-                case 'error': icon = '❌'; break; 
-                case 'warn': icon = '⚠️'; break; 
-                case 'info': icon = 'ℹ️'; break; 
-            } 
-            
-            const notification = document.createElement('div'); 
-            notification.style.cssText = `background-color: ${estilo.cores.notificationBg}; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); color: ${estilo.cores.texto}; padding: 10px 15px; border-radius: ${estilo.radiusSmall}; box-shadow: ${estilo.sombras.notification}; display: flex; align-items: center; gap: 10px; min-width: 180px; max-width: 320px; opacity: 0; transform: translateY(15px); transition: opacity 0.3s ease-out, transform 0.3s ease-out; border: 1px solid ${estilo.cores.borda}; cursor: pointer;`; 
-            
-            const iconSpan = document.createElement('span'); 
-            iconSpan.textContent = icon; 
-            iconSpan.style.fontSize = '1.2em'; 
-            
-            const textContent = document.createElement('div'); 
-            textContent.style.cssText = `flex-grow: 1; font-size: 0.95em; line-height: 1.3; word-break: break-word;`; 
-            textContent.innerHTML = `<span style="font-weight: 600; color: ${estilo.cores.texto};">${titleText}</span> ${detailText ? `<span style="font-size: 0.9em; color: ${estilo.cores.textoSecundario}; margin-left: 3px;">${detailText}</span>` : ''}`; 
-            
-            let dismissTimeout; 
-            const dismiss = () => { 
-                clearTimeout(dismissTimeout); 
-                notification.style.opacity = '0'; 
-                notification.style.transform = 'translateY(20px)'; 
-                setTimeout(() => notification.remove(), 300); 
-            }; 
-            
-            notification.onclick = dismiss; 
-            notification.append(iconSpan, textContent); 
-            STATE.notificationContainer.appendChild(notification); 
-            requestAnimationFrame(() => { 
-                notification.style.opacity = '1'; 
-                notification.style.transform = 'translateY(0)'; 
-            }); 
-            dismissTimeout = setTimeout(dismiss, effectiveDuration); 
-            logMessage('INFO', `Notificação (${effectiveDuration}ms): ${titleText} ${detailText}. Tipo: ${type}`); 
+        
+        // Botão de limpar dados
+        clearDataBtn.onclick = () => {
+            STATE.correctedTasks = [];
+            STATE.stats = {
+                totalIntercepted: 0,
+                totalCorrected: 0,
+                totalFailed: 0
+            };
+            updateStatsDisplay();
+            updateCorrectedTasksList();
+            sendToast('Dados limpos com sucesso', 3000);
         };
-
+        
+        // Logs modal
         const createLogModal = () => { 
             if (STATE.logModal) return; 
             logMessage('DEBUG', 'Criando modal de logs.'); 
             
             const modal = document.createElement('div'); 
-            modal.id = 'hck-log-modal'; 
+            modal.id = 'hck-tarefas-log-modal'; 
             modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 10001; font-family: 'Inter', sans-serif; backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);`; 
             
             const modalContent = document.createElement('div'); 
@@ -897,7 +634,7 @@ QUESTÃO:
             modalHeader.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid ${estilo.cores.borda}; padding-bottom: 8px; gap: 10px;`; 
             
             const modalTitle = document.createElement('h3'); 
-            modalTitle.textContent = 'Logs Detalhados (Bookmarklet)'; 
+            modalTitle.textContent = 'Logs Detalhados (HCK TAREFAS)'; 
             modalTitle.style.cssText = `margin: 0; color: ${estilo.cores.texto}; font-weight: 600; font-size: 16px; flex-grow: 1;`; 
             
             const copyLogBtn = document.createElement('button'); 
@@ -942,7 +679,7 @@ QUESTÃO:
             modalHeader.append(modalTitle, copyLogBtn, closeLogBtn); 
             
             const logArea = document.createElement('div'); 
-            logArea.id = 'hck-log-area'; 
+            logArea.id = 'hck-tarefas-log-area'; 
             logArea.style.cssText = `flex-grow: 1; overflow-y: auto; font-size: 11px; line-height: 1.6; background-color: ${estilo.cores.fundo}; border-radius: ${estilo.radiusSmall}; padding: 10px; border: 1px solid ${estilo.cores.borda}; white-space: pre-wrap; word-wrap: break-word; scrollbar-width: thin; scrollbar-color: ${estilo.cores.fundoTerciario} ${estilo.cores.fundo}; font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;`; 
             
             modalContent.append(modalHeader, logArea); 
@@ -954,7 +691,7 @@ QUESTÃO:
         const showLogs = () => { 
             logMessage('DEBUG', 'showLogs chamado.'); 
             if (!STATE.logModal) createLogModal(); 
-            const logArea = STATE.logModal?.querySelector('#hck-log-area'); 
+            const logArea = STATE.logModal?.querySelector('#hck-tarefas-log-area'); 
             if (!logArea) { 
                 logMessage('ERROR', 'Área de log não encontrada no modal.'); 
                 return;
@@ -986,27 +723,19 @@ QUESTÃO:
         logsBtn.addEventListener('click', showLogs);
 
         return { 
-            elements: { 
-                input, 
-                analyzeBtn, 
-                clearBtn, 
-                updateImagesBtn, 
-                logsBtn, 
-                imagesContainer, 
-                toggleBtn 
-            }, 
             helpers: { 
-                updateImageButtons, 
-                showResponse, 
                 toggleMenu, 
                 showLogs, 
-                hideLogs 
+                hideLogs,
+                updateStatusDisplay,
+                updateStatsDisplay,
+                updateCorrectedTasksList
             } 
         };
     }
 
     async function init() {
-        logMessage('INFO',`----- HCK Bookmarklet Inicializando (v${SCRIPT_VERSION}) -----`);
+        logMessage('INFO',`----- ${SCRIPT_NAME} Inicializando (v${SCRIPT_VERSION}) -----`);
         
         try {
             // Carrega fontes primeiro (opcional, pode ser em paralelo)
@@ -1014,180 +743,124 @@ QUESTÃO:
             // Carrega dependências do Toastify
             await loadCss('https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css');
             await loadScript('https://cdn.jsdelivr.net/npm/toastify-js');
+            STATE.isToastifyLoaded = true;
             injectToastStyles();
             
             const ui = setupUI();
             if (!ui) throw new Error("Falha crítica na configuração da UI.");
             logMessage('INFO','Configuração da UI completa.');
 
-            const { input, analyzeBtn, clearBtn, updateImagesBtn, toggleBtn } = ui.elements;
-            const { updateImageButtons, showResponse } = ui.helpers;
-            const estiloCores = { 
-                erro: '#FF453A', 
-                accentBg: '#007AFF', 
-                fundoSecundario: '#2C2C2E', 
-                textoSecundario: '#8A8A8E', 
-                borda: '#38383A' 
-            };
-
-            sendToast(`>> ${SCRIPT_NAME} Injetado com sucesso!`, 3000);
+            sendToast(`>> ${SCRIPT_NAME} Injetado! Aguardando login...`, 3000);
             sendToast("Créditos: inacallep, miitch, crackingnlearn, hackermoon", 5000);
 
-            const setAnalyzeButtonState = (analyzing, rateLimited = false) => {
-                 const currentBtn = document.getElementById('hck-analyze-btn');
-                 const currentToggleBtn = document.getElementById('hck-toggle-btn');
-                 if (!currentBtn) return;
+            // Interceptador de fetch
+            const originalFetch = window.fetch;
+            window.fetch = async function(input, init) {
+                const url = typeof input === 'string' ? input : input.url;
+                const method = init ? init.method : 'GET';
 
-                 if (rateLimited) {
-                     currentBtn.disabled = true;
-                     currentBtn.textContent = `Limite Atingido...`;
-                     currentBtn.style.backgroundColor = estiloCores.erro;
-                     if(currentToggleBtn) currentToggleBtn.style.borderColor = estiloCores.erro;
-                 } else if (analyzing) {
-                     currentBtn.disabled = true;
-                     currentBtn.textContent = `Analisando...`;
-                     currentBtn.style.backgroundColor = estiloCores.accentBg;
-                     if(currentToggleBtn) currentToggleBtn.style.borderColor = estiloCores.borda;
-                 } else {
-                     currentBtn.disabled = false;
-                     currentBtn.textContent = `Analisar Questão`;
-                     currentBtn.style.backgroundColor = estiloCores.accentBg;
-                      if(currentToggleBtn) currentToggleBtn.style.borderColor = estiloCores.borda;
-                 }
-             };
+                if (url === 'https://edusp-api.ip.tv/registration/edusp/token' && !STATE.capturedLoginData) {
+                    try {
+                        const response = await originalFetch.apply(this, arguments);
+                        const clonedResponse = response.clone();
+                        const data = await clonedResponse.json();
 
-            analyzeBtn.onclick = async () => {
-                logMessage('INFO', "----- Botão Analisar Clicado -----");
-                const question = input.value.trim();
+                        if (data && data.auth_token) {
+                            STATE.capturedLoginData = data;
+                            logMessage('INFO', 'Token capturado com sucesso');
+                            
+                            if (STATE.isToastifyLoaded) {
+                                sendToast("Entrada feita com sucesso!", 3000);
 
-                if (STATE.isAnalyzing) {
-                    logMessage('WARN', `Análise ignorada: Já está analisando.`);
-                    sendToast("Aguarde", 3000);
-                    return;
-                }
-                if (STATE.rateLimitActive) {
-                     logMessage('WARN', `Análise ignorada: Backoff global de rate limit ativo.`);
-                     sendToast("Limite Atingido. Aguarde.", 4000);
-                     setAnalyzeButtonState(false, true);
-                     return;
-                 }
-                if (!question) {
-                    logMessage('WARN', `Análise ignorada: Campo da questão vazio.`);
-                    sendToast("Erro: Insira o texto da questão", 4000);
-                    input.focus();
-                    return;
-                }
-                 if (!CONFIG.API_KEYS_GEMINI || CONFIG.API_KEYS_GEMINI.length === 0 || !CONFIG.API_KEYS_GEMINI[0]) {
-                    logMessage('ERROR', "Análise bloqueada: Nenhuma chave de API configurada.");
-                    sendToast("Erro: Nenhuma chave de API definida", 5000);
-                    return;
-                }
+                                const fullUserName = data?.name;
+                                let firstName = '';
+                                if (fullUserName && typeof fullUserName === 'string') {
+                                    const nameParts = fullUserName.trim().split(' ');
+                                    firstName = nameParts[0] || '';
+                                    if (firstName) {
+                                        firstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+                                    }
+                                }
 
-                STATE.isAnalyzing = true;
-                setAnalyzeButtonState(true);
-                logMessage("INFO", "Iniciando análise...");
-                logMessage("DEBUG", `Questão: ${question.substring(0,100)}...`);
-
-                try {
-                    const images = extractImages();
-                    updateImageButtons(images);
-
-                    const prompt = await buildPrompt(question, images);
-
-                    logMessage('INFO', `Consultando ${CONFIG.MODELS.length} modelos via fetch()...`);
-                    const promises = CONFIG.MODELS.map(modelInfo =>
-                        fetchWithRetry(modelInfo.name, () => queryGemini(modelInfo, prompt))
-                            .catch(e => {
-                                logMessage('ERROR', `[${modelInfo.name}] FALHA FINAL após retentativas: ${e.message}`);
-                                return Promise.reject(e);
-                            })
-                    );
-
-                    const results = await Promise.allSettled(promises);
-
-                    const rateLimitHitDuringAnalysis = results.some(r => r.status === 'rejected' && r.reason?.message?.includes('Rate Limit'));
-                    if (rateLimitHitDuringAnalysis && !STATE.rateLimitActive) {
-                         logMessage('WARN', 'Rate limit detectado durante análise. Ativando flag global.');
-                         STATE.rateLimitActive = true;
-                         if (STATE.rateLimitTimeoutId) clearTimeout(STATE.rateLimitTimeoutId);
-                         STATE.rateLimitTimeoutId = setTimeout(() => {
-                             logMessage('INFO', 'Backoff global de rate limit desativado automaticamente.');
-                             STATE.rateLimitActive = false;
-                             STATE.rateLimitTimeoutId = null;
-                             if (!STATE.isAnalyzing) setAnalyzeButtonState(false, false);
-                         }, 30000);
-                     }
-
-                     const corsFailure = results.some(r => r.status === 'rejected' && (r.reason?.message?.toLowerCase().includes('cors') || r.reason?.message?.toLowerCase().includes('failed to fetch')));
-                     if (corsFailure) {
-                        logMessage('ERROR', 'Uma ou mais requisições falharam devido a CORS ou problemas de rede.');
-                     }
-
-                    logMessage('INFO', 'Determinando consenso...');
-                    const consensusResult = determineConsensus(results);
-                    
-                    // Usando Toastify para mostrar o resultado
-                    let toastMessage = consensusResult.answer;
-                    if (consensusResult.detail) {
-                        toastMessage += ` ${consensusResult.detail}`;
+                                if (firstName) {
+                                    setTimeout(() => {
+                                        sendToast(`Seja bem-vindo(a), ${firstName}!`, 3500);
+                                    }, 250);
+                                }
+                            }
+                            
+                            // Atualiza a UI se estiver visível
+                            if (window.updateStatusDisplay) {
+                                window.updateStatusDisplay();
+                            }
+                        }
+                        return response;
+                    } catch (error) {
+                        console.error('[HCK TAREFAS] Erro CRÍTICO ao processar resposta do token:', error);
+                        if (STATE.isToastifyLoaded) {
+                            sendToast("Erro CRÍTICO ao capturar token. Ver console.", 5000);
+                        }
+                        return originalFetch.apply(this, arguments);
                     }
-                    
-                    let toastDuration = CONFIG.NOTIFICATION_TIMEOUT;
-                    if (consensusResult.type === 'error' || consensusResult.type === 'warn') {
-                        toastDuration = CONFIG.NOTIFICATION_TIMEOUT_LONG;
+                }
+
+                const response = await originalFetch.apply(this, arguments);
+
+                const answerSubmitRegex = /^https:\/\/edusp-api\.ip\.tv\/tms\/task\/\d+\/answer$/;
+                if (answerSubmitRegex.test(url) && init && init.method === 'POST' && STATE.interceptEnabled) {
+                    if (!STATE.capturedLoginData || !STATE.capturedLoginData.auth_token) {
+                        if (STATE.isToastifyLoaded) {
+                            sendToast("Ops! Token não encontrado. Envie novamente após login.", 4000);
+                        }
+                        return response;
                     }
-                    
-                    sendToast(toastMessage, toastDuration);
 
-                } catch (error) {
-                    logMessage("ERROR", "Erro crítico durante a execução da análise:", error);
-                    sendToast(`Erro Crítico: ${error.message.substring(0,100)}`, CONFIG.NOTIFICATION_TIMEOUT_LONG);
-                } finally {
-                    STATE.isAnalyzing = false;
-                    setAnalyzeButtonState(false, STATE.rateLimitActive);
-                    logMessage("INFO", "----- Análise Finalizada -----");
+                    try {
+                        const clonedResponse = response.clone();
+                        const submittedData = await clonedResponse.json();
+                        STATE.stats.totalIntercepted++;
+                        
+                        // Atualiza a UI se estiver visível
+                        if (window.updateStatsDisplay) {
+                            window.updateStatsDisplay();
+                        }
+
+                        if (submittedData && submittedData.status !== "draft" && submittedData.id && submittedData.task_id) {
+                            sendToast("Envio detectado! Iniciando correção...", 2000);
+
+                            const headers_template = {
+                                "x-api-realm": "edusp",
+                                "x-api-platform": "webclient",
+                                "x-api-key": STATE.capturedLoginData.auth_token,
+                                "content-type": "application/json"
+                            };
+
+                            setTimeout(async () => {
+                                try {
+                                    const respostasOriginaisComGabarito = await pegarRespostasCorretas(submittedData.task_id, submittedData.id, headers_template);
+                                    await enviarRespostasCorrigidas(respostasOriginaisComGabarito, submittedData.task_id, submittedData.id, headers_template);
+                                } catch (correctionError) {
+                                    logMessage('ERROR', 'Erro durante o processo de correção automática:', correctionError);
+                                }
+                            }, 500);
+                        }
+                    } catch (err) {
+                        console.error('[HCK TAREFAS] Erro ao processar a resposta JSON do envio de tarefa POST:', err);
+                        if (STATE.isToastifyLoaded) {
+                            sendToast("Erro ao processar envio. Ver console.", 5000);
+                        }
+                    }
                 }
+
+                return response;
             };
 
-            clearBtn.onclick = () => { 
-                logMessage('INFO', "----- Limpar Clicado -----"); 
-                input.value = ''; 
-                STATE.images = []; 
-                STATE.imageCache = {}; 
-                updateImageButtons([]); 
-                input.focus(); 
-                logMessage("INFO", "Entradas limpas."); 
-                sendToast("Limpado", 3000);
-            };
-            
-            updateImagesBtn.onclick = () => { 
-                logMessage('INFO', "----- Atualizar Imagens Clicado -----"); 
-                try { 
-                    extractImages(); 
-                    updateImageButtons(STATE.images); 
-                    sendToast(`Imagens Atualizadas: ${STATE.images.length} detectadas`, 3000);
-                } catch (e) { 
-                    logMessage("ERROR","Erro ao atualizar imagens:",e); 
-                    sendToast("Erro ao atualizar imagens", 4000);
-                }
-            };
-
-            setTimeout(() => { 
-                logMessage("INFO", "Tentativa inicial de extração de imagens..."); 
-                try { 
-                    extractImages(); 
-                    updateImageButtons(STATE.images); 
-                } catch (e) { 
-                    logMessage("ERROR", "Erro na extração inicial de imagens:", e); 
-                }
-            }, 2000);
-
-            logMessage('INFO',`----- HCK Bookmarklet Inicializado (v${SCRIPT_VERSION}) -----`);
+            logMessage('INFO',`----- ${SCRIPT_NAME} Inicializado (v${SCRIPT_VERSION}) -----`);
             ui.helpers.toggleMenu(true);
 
         } catch (error) {
             logMessage('ERROR', '!!! ERRO CRÍTICO NA INICIALIZAÇÃO DO BOOKMARKLET !!!', error);
-            console.error(`[HCK Init Fail]: ${error.message}. Script pode não funcionar. Verifique o Console.`);
+            console.error(`[${SCRIPT_NAME} Init Fail]: ${error.message}. Script pode não funcionar. Verifique o Console.`);
             sendToast(`Erro na inicialização: ${error.message}`, 5000);
         }
     }

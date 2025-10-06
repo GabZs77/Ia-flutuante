@@ -1,4 +1,4 @@
-(async () => {
+javascript:(async () => {
     'use strict';
 
     if (document.getElementById('hck-ui-bookmarklet')) {
@@ -558,8 +558,8 @@ INSTRUÇÕES MUITO IMPORTANTES:
 5. SE INCERTO: Mesmo se não tiver 100% de certeza, escolha a alternativa MAIS PROVÁVEL e retorne apenas a letra correspondente.
 
 QUESTÃO:
-${question}
-${imageParts.length > 0 ? '\nIMAGENS (Analise cuidadosamente):\n' : (imageFetchErrors > 0 ? '\n(AVISO: Algumas ou todas as imagens não puderam ser carregadas/incluídas na análise devido a erros de rede/CORS)\n' : '\n(Nenhuma imagem relevante detectada ou fornecida)\n')}`;
+ ${question}
+ ${imageParts.length > 0 ? '\nIMAGENS (Analise cuidadosamente):\n' : (imageFetchErrors > 0 ? '\n(AVISO: Algumas ou todas as imagens não puderam ser carregadas/incluídas na análise devido a erros de rede/CORS)\n' : '\n(Nenhuma imagem relevante detectada ou fornecida)\n')}`;
 
         logMessage('DEBUG', "Texto do prompt gerado.");
 

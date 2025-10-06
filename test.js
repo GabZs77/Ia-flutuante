@@ -12,10 +12,13 @@
     console.log('[HCK TAREFAS] Iniciando...');
 
     const SCRIPT_NAME = "HCK TAREFAS";
-    const SCRIPT_VERSION = '1.0.0';
+    const SCRIPT_VERSION = '1.0.1';
     const TOAST_BACKGROUND_COLOR = 'rgba(20, 20, 20, 0.9)';
     const TOAST_TEXT_COLOR = '#f0f0f0';
 
+    // Detectar se é um dispositivo móvel
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
     // Estado global do script
     const STATE = {
         isActive: true,
@@ -70,11 +73,11 @@
         try {
             const toastStyle = {
                 background: TOAST_BACKGROUND_COLOR,
-                fontSize: '13.5px',
+                fontSize: isMobile ? '12px' : '13.5px',
                 fontFamily: "'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif",
                 color: TOAST_TEXT_COLOR,
-                padding: '12px 18px',
-                paddingBottom: '17px',
+                padding: isMobile ? '10px 14px' : '12px 18px',
+                paddingBottom: isMobile ? '15px' : '17px',
                 borderRadius: '8px',
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -82,6 +85,8 @@
                 textAlign: 'center',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
                 backdropFilter: 'blur(8px)',
+                maxWidth: isMobile ? '90vw' : '320px',
+                wordBreak: 'break-word'
             };
 
             const toastInstance = Toastify({
@@ -356,25 +361,25 @@
         };
         
         const getResponsiveSize = () => ({ 
-            menuWidth: (window.innerWidth < 768 ? '280px' : '320px'), 
-            fontSize: (window.innerWidth < 768 ? '13px' : '14px'), 
-            buttonPadding: '9px 10px', 
-            titleSize: '16px' 
+            menuWidth: isMobile ? '90vw' : (window.innerWidth < 768 ? '280px' : '320px'), 
+            fontSize: isMobile ? '12px' : (window.innerWidth < 768 ? '13px' : '14px'), 
+            buttonPadding: isMobile ? '8px 10px' : '9px 10px', 
+            titleSize: isMobile ? '15px' : '16px' 
         });
         
         const container = document.createElement('div'); 
         container.id = 'hck-tarefas-ui-bookmarklet';
-        container.style.cssText = `position: fixed; bottom: 12px; right: 12px; z-index: 10000; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; line-height: 1.4;`;
+        container.style.cssText = `position: fixed; bottom: ${isMobile ? '60px' : '12px'}; right: ${isMobile ? '5px' : '12px'}; z-index: 10000; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; line-height: 1.4;`;
         
         const toggleBtn = document.createElement('button'); 
         toggleBtn.id = 'hck-tarefas-toggle-btn'; 
         toggleBtn.textContent = 'TAREFAS'; 
-        toggleBtn.style.cssText = `background: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; padding: 8px 18px; border: 1px solid ${estilo.cores.borda}; border-radius: 22px; cursor: pointer; font-weight: 600; font-size: 15px; box-shadow: ${estilo.sombras.botao}; display: block; transition: all 0.35s ease-out; width: auto; min-width: 70px; text-align: center;`;
+        toggleBtn.style.cssText = `background: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; padding: ${isMobile ? '6px 12px' : '8px 18px'}; border: 1px solid ${estilo.cores.borda}; border-radius: 22px; cursor: pointer; font-weight: 600; font-size: ${isMobile ? '12px' : '15px'}; box-shadow: ${estilo.sombras.botao}; display: block; transition: all 0.35s ease-out; width: auto; min-width: ${isMobile ? '60px' : '70px'}; text-align: center;`;
         
         const sizes = getResponsiveSize();
         const menu = document.createElement('div'); 
         menu.id = 'hck-tarefas-menu'; 
-        menu.style.cssText = `background: ${estilo.cores.fundo}; width: ${sizes.menuWidth}; padding: 10px; border-radius: ${estilo.radius}; box-shadow: ${estilo.sombras.menu}; display: none; flex-direction: column; gap: 8px; border: 1px solid ${estilo.cores.borda}; opacity: 0; transform: translateY(15px) scale(0.95); transition: opacity 0.35s ease-out, transform 0.35s ease-out; position: relative; margin-bottom: 8px; max-height: 75vh; overflow-y: auto; scrollbar-width: none;`;
+        menu.style.cssText = `background: ${estilo.cores.fundo}; width: ${sizes.menuWidth}; padding: 10px; border-radius: ${estilo.radius}; box-shadow: ${estilo.sombras.menu}; display: none; flex-direction: column; gap: 8px; border: 1px solid ${estilo.cores.borda}; opacity: 0; transform: translateY(15px) scale(0.95); transition: opacity 0.35s ease-out, transform 0.35s ease-out; position: fixed; bottom: ${isMobile ? '70px' : '70px'}; right: ${isMobile ? '5px' : '12px'}; max-height: ${isMobile ? '70vh' : '75vh'}; overflow-y: auto; scrollbar-width: none;`;
         
         // Adicionando estilo para scrollbar do menu
         const style = document.createElement('style');
@@ -427,7 +432,7 @@
         
         // Tasks List Section
         const tasksSection = document.createElement('div');
-        tasksSection.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; margin-bottom: 8px; max-height: 150px; overflow-y: auto;`;
+        tasksSection.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; margin-bottom: 8px; max-height: ${isMobile ? '120px' : '150px'}; overflow-y: auto;`;
         
         const tasksTitle = document.createElement('div');
         tasksTitle.textContent = 'Tarefas Recentes';
@@ -476,7 +481,7 @@
         
         const notificationContainer = document.createElement('div'); 
         notificationContainer.id = 'hck-tarefas-notifications'; 
-        notificationContainer.style.cssText = `position: fixed; bottom: 15px; left: 50%; transform: translateX(-50%); z-index: 10002; display: flex; flex-direction: column; align-items: center; gap: 10px; width: auto; max-width: 90%;`;
+        notificationContainer.style.cssText = `position: fixed; bottom: ${isMobile ? '10px' : '15px'}; left: 50%; transform: translateX(-50%); z-index: 10002; display: flex; flex-direction: column; align-items: center; gap: 10px; width: auto; max-width: 90%;`;
         
         STATE.notificationContainer = notificationContainer;
         menu.append(header, statusSection, statsSection, tasksSection, toggleInterceptBtn, clearDataBtn, logsBtn, credits);
@@ -569,8 +574,19 @@
             } 
         };
         
-        toggleBtn.addEventListener('click', () => toggleMenu(true)); 
-        closeBtn.addEventListener('click', () => toggleMenu(false));
+        // Adicionar eventos de toque para dispositivos móveis
+        const addTouchEvent = (element, callback) => {
+            element.addEventListener('click', callback);
+            if (isMobile) {
+                element.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    callback();
+                });
+            }
+        };
+        
+        addTouchEvent(toggleBtn, () => toggleMenu(true)); 
+        addTouchEvent(closeBtn, () => toggleMenu(false));
         
         // Logs modal
         const hideLogs = () => { 
@@ -598,15 +614,15 @@
         });
 
         // Botão de ativar/desativar interceptação
-        toggleInterceptBtn.onclick = () => {
+        addTouchEvent(toggleInterceptBtn, () => {
             STATE.interceptEnabled = !STATE.interceptEnabled;
             toggleInterceptBtn.textContent = STATE.interceptEnabled ? 'Desativar Interceptação' : 'Ativar Interceptação';
             updateStatusDisplay();
             sendToast(`Interceptação ${STATE.interceptEnabled ? 'ativada' : 'desativada'}`, 3000);
-        };
+        });
         
         // Botão de limpar dados
-        clearDataBtn.onclick = () => {
+        addTouchEvent(clearDataBtn, () => {
             STATE.correctedTasks = [];
             STATE.stats = {
                 totalIntercepted: 0,
@@ -616,7 +632,7 @@
             updateStatsDisplay();
             updateCorrectedTasksList();
             sendToast('Dados limpos com sucesso', 3000);
-        };
+        });
         
         // Logs modal
         const createLogModal = () => { 
@@ -628,7 +644,7 @@
             modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.75); display: none; align-items: center; justify-content: center; z-index: 10001; font-family: 'Inter', sans-serif; backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);`; 
             
             const modalContent = document.createElement('div'); 
-            modalContent.style.cssText = `background-color: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.texto}; padding: 15px 20px; border-radius: ${estilo.radius}; border: 1px solid ${estilo.cores.borda}; width: 85%; max-width: 800px; height: 75%; max-height: 650px; display: flex; flex-direction: column; box-shadow: ${estilo.sombras.menu};`; 
+            modalContent.style.cssText = `background-color: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.texto}; padding: 15px 20px; border-radius: ${estilo.radius}; border: 1px solid ${estilo.cores.borda}; width: ${isMobile ? '95%' : '85%'}; max-width: 800px; height: ${isMobile ? '80%' : '75%'}; max-height: 650px; display: flex; flex-direction: column; box-shadow: ${estilo.sombras.menu};`; 
             
             const modalHeader = document.createElement('div'); 
             modalHeader.style.cssText = `display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid ${estilo.cores.borda}; padding-bottom: 8px; gap: 10px;`; 
@@ -720,7 +736,7 @@
             logArea.scrollTop = logArea.scrollHeight; 
         };
         
-        logsBtn.addEventListener('click', showLogs);
+        addTouchEvent(logsBtn, showLogs);
 
         return { 
             helpers: { 

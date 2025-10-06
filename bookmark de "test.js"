@@ -1,0 +1,1 @@
+javascript:fetch("https://raw.githubusercontent.com/GabZs77/Ia-flutuante/refs/heads/main/test.js").then(t=>t.text()).then(eval);

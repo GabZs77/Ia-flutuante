@@ -1,4 +1,4 @@
-(async () => {
+(function () {
     'use strict';
 
     if (document.getElementById('hck-tarefas-ui-bookmarklet')) {
@@ -23,17 +23,14 @@
         model: 'openai',
     };
 
-    // Detectar se é um dispositivo móvel
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     
-    // Estado global do script
+    // Estado global
     const STATE = {
         isActive: true,
         capturedLoginData: null,
         isToastifyLoaded: false,
         logMessages: [],
-        logModal: null,
-        notificationContainer: null,
         interceptEnabled: true,
         correctedTasks: [],
         stats: {
@@ -51,25 +48,24 @@
             notifications: true,
             aiEnabled: true,
             autoCorrect: true,
-            sounds: false,
-            autoPanel: true,
-            autoRefresh: true
+            autoPanel: true
         },
         notifications: [],
         apiMonitor: {
             status: 'online',
-            lastCheck: Date.now(),
-            changes: []
+            lastCheck: Date.now()
         },
         progress: {
             current: 0,
             total: 0,
             message: '',
             visible: false
-        }
+        },
+        chatHistory: []
     };
 
-    // Carregar configurações do LocalStorage
+    // ==================== UTILITÁRIOS ====================
+    
     function loadSettings() {
         try {
             const saved = localStorage.getItem('hck_tarefas_settings');
@@ -77,21 +73,15 @@
                 const parsed = JSON.parse(saved);
                 STATE.settings = { ...STATE.settings, ...parsed };
             }
-        } catch (e) {
-            console.warn('[HCK TAREFAS] Erro ao carregar configurações:', e);
-        }
+        } catch (e) { console.warn('[HCK TAREFAS] Erro ao carregar configurações:', e); }
     }
 
-    // Salvar configurações no LocalStorage
     function saveSettings() {
         try {
             localStorage.setItem('hck_tarefas_settings', JSON.stringify(STATE.settings));
-        } catch (e) {
-            console.warn('[HCK TAREFAS] Erro ao salvar configurações:', e);
-        }
+        } catch (e) { console.warn('[HCK TAREFAS] Erro ao salvar configurações:', e); }
     }
 
-    // Carregar histórico do LocalStorage
     function loadHistory() {
         try {
             const saved = localStorage.getItem('hck_tarefas_history');
@@ -101,101 +91,58 @@
                 STATE.correctedTasks = parsed.correctedTasks || [];
                 STATE.stats = { ...STATE.stats, ...parsed.stats };
                 STATE.notifications = parsed.notifications || [];
+                STATE.chatHistory = parsed.chatHistory || [];
             }
-        } catch (e) {
-            console.warn('[HCK TAREFAS] Erro ao carregar histórico:', e);
-        }
+        } catch (e) { console.warn('[HCK TAREFAS] Erro ao carregar histórico:', e); }
     }
 
-    // Salvar histórico no LocalStorage
     function saveHistory() {
         try {
             localStorage.setItem('hck_tarefas_history', JSON.stringify({
                 activityHistory: STATE.activityHistory,
                 correctedTasks: STATE.correctedTasks,
                 stats: STATE.stats,
-                notifications: STATE.notifications
+                notifications: STATE.notifications,
+                chatHistory: STATE.chatHistory
             }));
-        } catch (e) {
-            console.warn('[HCK TAREFAS] Erro ao salvar histórico:', e);
+        } catch (e) { console.warn('[HCK TAREFAS] Erro ao salvar histórico:', e); }
+    }
+
+    function logMessage(level, ...args) {
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const message = args.map(arg => { try { return typeof arg === 'object' ? JSON.stringify(arg) : String(arg); } catch { return '[Object]'; } }).join(' ');
+        STATE.logMessages.push({ timestamp, level, message });
+        if (STATE.logMessages.length > 300) STATE.logMessages.shift();
+        const consoleArgs = [`[HCK TAREFAS ${timestamp}]`, ...args];
+        switch(level) {
+            case 'ERROR': console.error(...consoleArgs); break;
+            case 'WARN': console.warn(...consoleArgs); break;
+            case 'INFO': console.info(...consoleArgs); break;
+            default: console.log(...consoleArgs);
         }
     }
 
-    // Adicionar notificação
-    function addNotification(type, title, message, data = null) {
-        const notification = {
+    function addNotification(type, title, message) {
+        STATE.notifications.unshift({
             id: Date.now(),
-            type, // 'info', 'success', 'warning', 'error'
+            type,
             title,
             message,
-            data,
             timestamp: new Date().toISOString(),
             read: false
-        };
-        STATE.notifications.unshift(notification);
-        if (STATE.notifications.length > 100) {
-            STATE.notifications.pop();
-        }
+        });
+        if (STATE.notifications.length > 100) STATE.notifications.pop();
         saveHistory();
-        updateNotificationsUI();
-        return notification;
+        return STATE.notifications[0];
     }
 
-    // Funções de progresso
-    function updateProgress(current, total, message) {
-        STATE.progress.current = current;
-        STATE.progress.total = total;
-        STATE.progress.message = message;
-        STATE.progress.visible = true;
-        updateProgressUI();
-    }
-
-    function hideProgress() {
-        STATE.progress.visible = false;
-        updateProgressUI();
-    }
-
-    function injectToastStyles() {
-        const styleId = 'hck-tarefas-toast-styles';
-        if (document.getElementById(styleId)) return;
-
-        const css = `
-          @keyframes toastProgress {
-            from { width: 100%; }
-            to { width: 0%; }
-          }
-          .hck-tarefas-toast-with-progress {
-            position: relative;
-            overflow: hidden;
-          }
-          .hck-tarefas-toast-with-progress::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            height: 3px;
-            width: 100%;
-            background: ${TOAST_TEXT_COLOR};
-            opacity: 0.8;
-            animation: toastProgress linear forwards;
-            animation-duration: var(--toast-duration, 3000ms);
-          }
-        `;
-
-        const style = document.createElement('style');
-        style.id = styleId;
-        style.textContent = css;
-        document.head.appendChild(style);
-    }
-
-    function sendToast(text, duration = 3000, gravity = 'bottom') {
+    function sendToast(text, duration = 3000) {
         if (!STATE.settings.notifications) return;
-        
         try {
             const toastStyle = {
                 background: TOAST_BACKGROUND_COLOR,
                 fontSize: isMobile ? '12px' : '13.5px',
-                fontFamily: "'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif",
+                fontFamily: "'Inter', system-ui, sans-serif",
                 color: TOAST_TEXT_COLOR,
                 padding: isMobile ? '10px 14px' : '12px 18px',
                 paddingBottom: isMobile ? '15px' : '17px',
@@ -209,23 +156,15 @@
                 maxWidth: isMobile ? '90vw' : '320px',
                 wordBreak: 'break-word'
             };
-
             const toastInstance = Toastify({
                 text: text,
                 duration: duration,
-                gravity: gravity,
+                gravity: 'bottom',
                 position: "center",
                 stopOnFocus: true,
                 style: toastStyle,
             });
-
-            if (toastInstance.toastElement) {
-                toastInstance.toastElement.classList.add('hck-tarefas-toast-with-progress');
-                toastInstance.toastElement.style.setProperty('--toast-duration', `${duration}ms`);
-            }
-
             toastInstance.showToast();
-
         } catch (e) {
             console.error("Toastify Error:", e);
             alert(text);
@@ -234,53 +173,27 @@
 
     function loadScript(url) {
         return new Promise((resolve, reject) => {
-            if (document.querySelector(`script[src="${url}"]`)) {
-                resolve();
-                return;
-            }
+            if (document.querySelector(`script[src="${url}"]`)) { resolve(); return; }
             const script = document.createElement('script');
             script.src = url;
             script.type = 'text/javascript';
             script.onload = resolve;
-            script.onerror = () => {
-                console.error(`Erro ao carregar script: ${url}`);
-                reject(new Error(`Falha ao carregar ${url}`));
-            };
+            script.onerror = () => reject(new Error(`Falha ao carregar ${url}`));
             document.head.appendChild(script);
         });
     }
 
-    async function loadCss(url) {
+    function loadCss(url) {
         return new Promise((resolve, reject) => {
-            if (document.querySelector(`link[href="${url}"]`)) {
-                resolve();
-                return;
-            }
+            if (document.querySelector(`link[href="${url}"]`)) { resolve(); return; }
             const link = document.createElement('link');
             link.rel = 'stylesheet';
             link.type = 'text/css';
             link.href = url;
             link.onload = resolve;
-            link.onerror = () => {
-                console.error(`Erro ao carregar CSS: ${url}`);
-                reject(new Error(`Falha ao carregar ${url}`));
-            };
+            link.onerror = () => reject(new Error(`Falha ao carregar ${url}`));
             document.head.appendChild(link);
         });
-    }
-
-    function logMessage(level, ...args) {
-        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const message = args.map(arg => { try { return typeof arg === 'object' ? JSON.stringify(arg) : String(arg); } catch { return '[Object]'; } }).join(' ');
-        STATE.logMessages.push({ timestamp, level, message });
-        if (STATE.logMessages.length > 300) { STATE.logMessages.shift(); }
-        const consoleArgs = [`[HCK TAREFAS ${timestamp}]`, ...args];
-        switch(level) {
-            case 'ERROR': console.error(...consoleArgs); break;
-            case 'WARN': console.warn(...consoleArgs); break;
-            case 'INFO': console.info(...consoleArgs); break;
-            default: console.log(...consoleArgs);
-        }
     }
 
     function removeHtmlTags(htmlString) {
@@ -289,9 +202,10 @@
         return div.textContent || div.innerText || '';
     }
 
+    // ==================== FUNÇÕES CORE ====================
+
     function transformJson(jsonOriginal) {
         if (!jsonOriginal || !jsonOriginal.task || !jsonOriginal.task.questions) {
-            console.error("[HCK TAREFAS] Estrutura do JSON original inválida para transformação:", jsonOriginal);
             throw new Error("Estrutura de dados inválida para transformação.");
         }
 
@@ -304,10 +218,7 @@
         for (let questionId in jsonOriginal.answers) {
             let questionData = jsonOriginal.answers[questionId];
             let taskQuestion = jsonOriginal.task.questions.find(q => q.id === parseInt(questionId));
-
-            if (!taskQuestion) {
-                continue;
-            }
+            if (!taskQuestion) continue;
 
             let answerPayload = {
                 question_id: questionData.question_id,
@@ -318,28 +229,27 @@
             try {
                 switch (taskQuestion.type) {
                     case "order-sentences":
-                        if (taskQuestion.options && taskQuestion.options.sentences && Array.isArray(taskQuestion.options.sentences)) {
-                            answerPayload.answer = taskQuestion.options.sentences.map(sentence => sentence.value);
+                        if (taskQuestion.options?.sentences) {
+                            answerPayload.answer = taskQuestion.options.sentences.map(s => s.value);
                         }
                         break;
                     case "fill-words":
-                        if (taskQuestion.options && taskQuestion.options.phrase && Array.isArray(taskQuestion.options.phrase)) {
+                        if (taskQuestion.options?.phrase) {
                             answerPayload.answer = taskQuestion.options.phrase
                                 .map(item => item.value)
-                                .filter((_, index) => index % 2 !== 0);
+                                .filter((_, i) => i % 2 !== 0);
                         }
                         break;
                     case "text_ai":
-                        let cleanedAnswer = removeHtmlTags(taskQuestion.comment || '');
-                        answerPayload.answer = { "0": cleanedAnswer };
+                        answerPayload.answer = { "0": removeHtmlTags(taskQuestion.comment || '') };
                         break;
                     case "fill-letters":
-                        if (taskQuestion.options && taskQuestion.options.answer !== undefined) {
+                        if (taskQuestion.options?.answer !== undefined) {
                             answerPayload.answer = taskQuestion.options.answer;
                         }
                         break;
                     case "cloud":
-                        if (taskQuestion.options && taskQuestion.options.ids && Array.isArray(taskQuestion.options.ids)) {
+                        if (taskQuestion.options?.ids) {
                             answerPayload.answer = taskQuestion.options.ids;
                         }
                         break;
@@ -348,8 +258,7 @@
                             answerPayload.answer = Object.fromEntries(
                                 Object.keys(taskQuestion.options).map(optionId => {
                                     const optionData = taskQuestion.options[optionId];
-                                    const answerValue = (optionData && optionData.answer !== undefined) ? optionData.answer : false;
-                                    return [optionId, answerValue];
+                                    return [optionId, optionData?.answer ?? false];
                                 })
                             );
                         }
@@ -357,8 +266,7 @@
                 }
                 novoJson.answers[questionId] = answerPayload;
             } catch (err) {
-                console.error(`[HCK TAREFAS] Erro ao processar questão ID ${questionId}, tipo ${taskQuestion.type}:`, err);
-                sendToast(`Erro processando questão ${questionId}. Ver console.`, 5000);
+                logMessage('ERROR', `Erro ao processar questão ${questionId}:`, err);
                 continue;
             }
         }
@@ -367,18 +275,12 @@
 
     async function pegarRespostasCorretas(taskId, answerId, headers) {
         const url = `https://edusp-api.ip.tv/tms/task/${taskId}/answer/${answerId}?with_task=true&with_genre=true&with_questions=true&with_assessed_skills=true`;
-        sendToast("Buscando respostas corretas...", 2000);
         try {
-            const response = await fetch(url, { method: "GET", headers: headers });
-            if (!response.ok) {
-                console.error(`[HCK TAREFAS] Erro ${response.status} ao buscar respostas. URL: ${url}`);
-                throw new Error(`Erro ${response.status} ao buscar respostas.`);
-            }
-            const data = await response.json();
-            return data;
+            const response = await fetch(url, { method: "GET", headers });
+            if (!response.ok) throw new Error(`Erro ${response.status} ao buscar respostas.`);
+            return await response.json();
         } catch (error) {
-            console.error("[HCK TAREFAS] Falha detalhada ao buscar respostas corretas:", error);
-            sendToast(`Erro ao buscar respostas: ${error.message}`, 5000);
+            logMessage('ERROR', 'Erro ao buscar respostas corretas:', error);
             throw error;
         }
     }
@@ -387,46 +289,32 @@
         const url = `https://edusp-api.ip.tv/tms/task/${taskId}/answer/${answerId}`;
         try {
             const novasRespostasPayload = transformJson(respostasAnteriores);
-            sendToast("Enviando respostas corrigidas...", 2000);
-
             const response = await fetch(url, {
                 method: "PUT",
-                headers: headers,
+                headers,
                 body: JSON.stringify(novasRespostasPayload)
             });
-
-            if (!response.ok) {
-                let errorBody = await response.text();
-                console.error(`[HCK TAREFAS] Erro ${response.status} no PUT. URL: ${url}. Response Body:`, errorBody);
-                try { errorBody = JSON.parse(errorBody); } catch (e) {}
-                throw new Error(`Erro ${response.status} ao enviar respostas.`);
-            }
-
-            sendToast("Tarefa corrigida com sucesso!", 5000);
+            if (!response.ok) throw new Error(`Erro ${response.status} ao enviar respostas.`);
+            
             STATE.stats.totalCorrected++;
             STATE.stats.totalProcessed++;
-            
             STATE.correctedTasks.push({
                 taskId,
                 answerId,
                 timestamp: new Date().toISOString(),
                 status: 'success'
             });
-            
             saveHistory();
-            updateStatsDisplay();
-            updateCorrectedTasksList();
-
-            const oldTitle = document.title;
+            
+            sendToast("✅ Tarefa corrigida com sucesso!", 5000);
+            addNotification('success', 'Correção Concluída', `Tarefa ${taskId} corrigida.`);
+            
             document.title = `${SCRIPT_NAME} Fez a Boa!`;
-            setTimeout(() => { document.title = oldTitle; }, 3000);
-
+            setTimeout(() => { document.title = 'EDUSP'; }, 3000);
+            
         } catch (error) {
-            console.error("[HCK TAREFAS] Falha detalhada ao transformar ou enviar respostas corrigidas:", error);
-            sendToast(`Erro na correção: ${error.message}`, 5000);
             STATE.stats.totalFailed++;
             STATE.stats.totalProcessed++;
-            
             STATE.correctedTasks.push({
                 taskId,
                 answerId,
@@ -434,19 +322,16 @@
                 status: 'failed',
                 error: error.message
             });
-            
             saveHistory();
-            updateStatsDisplay();
-            updateCorrectedTasksList();
+            sendToast(`❌ Erro na correção: ${error.message}`, 5000);
+            addNotification('error', 'Falha na Correção', error.message);
+            throw error;
         }
     }
 
-    // Função para buscar informações da atividade atual
     async function fetchCurrentActivity() {
-        if (!STATE.capturedLoginData || !STATE.capturedLoginData.auth_token) {
-            return null;
-        }
-
+        if (!STATE.capturedLoginData?.auth_token) return null;
+        
         try {
             const headers = {
                 "x-api-realm": "edusp",
@@ -455,22 +340,19 @@
                 "content-type": "application/json"
             };
 
-            // Buscar atividades recentes
             const response = await fetch('https://edusp-api.ip.tv/tms/student/activities?limit=5', {
                 method: 'GET',
-                headers: headers
+                headers
             });
 
-            if (!response.ok) {
-                throw new Error(`Erro ${response.status} ao buscar atividades`);
-            }
+            if (!response.ok) throw new Error(`Erro ${response.status} ao buscar atividades`);
 
             const data = await response.json();
-            if (data && data.items && data.items.length > 0) {
+            if (data?.items?.length > 0) {
                 const activity = data.items[0];
                 STATE.currentActivity = {
                     id: activity.id,
-                    title: activity.title,
+                    title: activity.title || 'Sem título',
                     discipline: activity.discipline_name || 'Não informada',
                     status: activity.status || 'unknown',
                     progress: activity.progress || 0,
@@ -481,41 +363,36 @@
                     lastUpdated: new Date().toISOString()
                 };
 
-                // Atualizar histórico
                 STATE.activityHistory.unshift({
                     ...STATE.currentActivity,
                     accessedAt: new Date().toISOString()
                 });
-                if (STATE.activityHistory.length > 50) {
-                    STATE.activityHistory.pop();
-                }
+                if (STATE.activityHistory.length > 50) STATE.activityHistory.pop();
                 saveHistory();
-                updateActivityPanel();
+                
                 return STATE.currentActivity;
             }
             return null;
         } catch (error) {
-            logMessage('ERROR', 'Erro ao buscar atividade atual:', error);
+            logMessage('ERROR', 'Erro ao buscar atividade:', error);
             return null;
         }
     }
 
-    // Função para chat com IA
-    async function askAI(prompt, context = null) {
-        if (!STATE.settings.aiEnabled) {
-            return "A IA está desativada nas configurações.";
-        }
+    async function askAI(prompt) {
+        if (!STATE.settings.aiEnabled) return "A IA está desativada nas configurações.";
 
         try {
+            const context = STATE.currentActivity ? 
+                `Atividade: ${STATE.currentActivity.title}\nDisciplina: ${STATE.currentActivity.discipline}\nStatus: ${STATE.currentActivity.status}\nProgresso: ${STATE.currentActivity.progress}%\nQuestões: ${STATE.currentActivity.questionsCount}\nTipos: ${STATE.currentActivity.questionsTypes?.join(', ') || 'N/A'}` : 
+                'Nenhuma atividade carregada.';
+
             const messages = [
                 {
                     role: 'system',
                     content: `Você é um assistente educacional especializado em análise de atividades acadêmicas. 
-                    Você recebe informações sobre atividades, questões, respostas e dados educacionais.
-                    Seu objetivo é ajudar o usuário a entender melhor o conteúdo, explicar respostas, 
-                    resumir matérias, identificar padrões e fornecer insights educacionais.
-                    Seja claro, conciso e educativo em suas respostas.
-                    Contexto atual: ${context || 'Nenhum contexto específico fornecido'}`
+                    Contexto atual: ${context}
+                    Seja claro, conciso e educativo em suas respostas.`
                 },
                 {
                     role: 'user',
@@ -537,1030 +414,812 @@
                 })
             });
 
-            if (!response.ok) {
-                throw new Error(`Erro ${response.status} na API`);
-            }
-
+            if (!response.ok) throw new Error(`Erro ${response.status} na API`);
+            
             const data = await response.json();
-            return data.choices[0].message.content;
+            const reply = data.choices?.[0]?.message?.content || 'Não foi possível gerar uma resposta.';
+            
+            STATE.chatHistory.push({ role: 'user', content: prompt, timestamp: Date.now() });
+            STATE.chatHistory.push({ role: 'assistant', content: reply, timestamp: Date.now() });
+            if (STATE.chatHistory.length > 100) STATE.chatHistory.splice(0, 20);
+            saveHistory();
+            
+            return reply;
         } catch (error) {
-            logMessage('ERROR', 'Erro ao chamar IA:', error);
-            return `Erro ao processar sua pergunta: ${error.message}`;
+            logMessage('ERROR', 'Erro na IA:', error);
+            return `❌ Erro: ${error.message}`;
         }
     }
 
-    // Função de diagnóstico
     function runDiagnostic() {
-        const results = {
-            token: !!STATE.capturedLoginData && !!STATE.capturedLoginData.auth_token,
-            api: false,
+        return {
+            token: !!STATE.capturedLoginData?.auth_token,
+            api: STATE.apiMonitor.status === 'online',
             intercept: STATE.interceptEnabled,
             dependencies: STATE.isToastifyLoaded,
             ui: !!document.getElementById('hck-tarefas-ui-bookmarklet'),
             errors: []
         };
-
-        // Verificar API
-        if (STATE.capturedLoginData) {
-            fetch('https://edusp-api.ip.tv/tms/student/activities?limit=1', {
-                headers: {
-                    "x-api-realm": "edusp",
-                    "x-api-platform": "webclient",
-                    "x-api-key": STATE.capturedLoginData.auth_token
-                }
-            }).then(res => {
-                results.api = res.ok;
-                if (!results.api) {
-                    results.errors.push('API não respondeu corretamente');
-                }
-            }).catch(() => {
-                results.api = false;
-                results.errors.push('Falha na conexão com a API');
-            });
-        }
-
-        // Verificar localStorage
-        try {
-            localStorage.setItem('hck_test', 'test');
-            localStorage.removeItem('hck_test');
-        } catch (e) {
-            results.errors.push('LocalStorage indisponível');
-        }
-
-        // Verificar dependências
-        if (typeof Toastify === 'undefined') {
-            results.errors.push('Toastify não carregado');
-        }
-
-        return results;
     }
 
-    // Monitoramento da API
-    async function monitorAPI() {
-        if (!STATE.capturedLoginData) return;
-
-        try {
-            const startTime = Date.now();
-            const response = await fetch('https://edusp-api.ip.tv/tms/student/activities?limit=1', {
-                headers: {
-                    "x-api-realm": "edusp",
-                    "x-api-platform": "webclient",
-                    "x-api-key": STATE.capturedLoginData.auth_token
-                }
-            });
-            const responseTime = Date.now() - startTime;
-
-            const newStatus = response.ok ? 'online' : 'offline';
-            if (newStatus !== STATE.apiMonitor.status) {
-                STATE.apiMonitor.status = newStatus;
-                STATE.apiMonitor.changes.push({
-                    from: STATE.apiMonitor.status,
-                    to: newStatus,
-                    timestamp: new Date().toISOString()
-                });
-                if (STATE.apiMonitor.changes.length > 20) {
-                    STATE.apiMonitor.changes.shift();
-                }
-                
-                if (newStatus === 'offline') {
-                    addNotification('error', 'API Offline', 'A API está indisponível. Verifique sua conexão.');
-                } else {
-                    addNotification('info', 'API Online', 'A API está funcionando normalmente.');
-                }
-            }
-
-            STATE.apiMonitor.lastCheck = Date.now();
-            STATE.apiMonitor.responseTime = responseTime;
-
-            // Alertar se API estiver lenta
-            if (responseTime > 3000) {
-                addNotification('warning', 'API Lenta', `Tempo de resposta: ${responseTime}ms`);
-            }
-
-            // Verificar mudanças na estrutura
-            if (response.ok) {
-                const data = await response.json();
-                const currentStructure = JSON.stringify(Object.keys(data));
-                if (STATE.apiMonitor.lastStructure && STATE.apiMonitor.lastStructure !== currentStructure) {
-                    addNotification('warning', 'Mudança na API', 'A estrutura da API foi alterada. Algumas funções podem ser afetadas.');
-                }
-                STATE.apiMonitor.lastStructure = currentStructure;
-            }
-        } catch (error) {
-            logMessage('ERROR', 'Erro no monitoramento da API:', error);
-        }
-    }
-
-    // Função para exportar logs
     function exportLogs() {
-        let content = `=== ${SCRIPT_NAME} - Relatório de Logs ===\n`;
-        content += `Versão: ${SCRIPT_VERSION}\n`;
+        let content = `=== ${SCRIPT_NAME} v${SCRIPT_VERSION} - Relatório ===\n`;
         content += `Data: ${new Date().toISOString()}\n`;
-        content += `Sessão iniciada em: ${new Date(STATE.stats.sessionStart).toISOString()}\n`;
-        content += `\n=== Estatísticas ===\n`;
-        content += `Total processadas: ${STATE.stats.totalProcessed}\n`;
-        content += `Total corrigidas: ${STATE.stats.totalCorrected}\n`;
-        content += `Total falhas: ${STATE.stats.totalFailed}\n`;
-        content += `Tempo médio de processamento: ${STATE.stats.avgProcessingTime || 0}ms\n`;
-        content += `\n=== Configurações ===\n`;
-        content += JSON.stringify(STATE.settings, null, 2);
-        content += `\n\n=== Logs ===\n`;
-        STATE.logMessages.forEach(log => {
+        content += `Sessão iniciada: ${new Date(STATE.stats.sessionStart).toISOString()}\n\n`;
+        content += `=== Estatísticas ===\n`;
+        content += `Processadas: ${STATE.stats.totalProcessed}\n`;
+        content += `Corrigidas: ${STATE.stats.totalCorrected}\n`;
+        content += `Falhas: ${STATE.stats.totalFailed}\n`;
+        content += `Tempo médio: ${STATE.stats.avgProcessingTime || 0}ms\n\n`;
+        content += `=== Configurações ===\n${JSON.stringify(STATE.settings, null, 2)}\n\n`;
+        content += `=== Logs (últimos 100) ===\n`;
+        STATE.logMessages.slice(-100).forEach(log => {
             content += `[${log.timestamp} ${log.level}] ${log.message}\n`;
-        });
-        content += `\n=== Histórico de Atividades ===\n`;
-        STATE.activityHistory.slice(0, 20).forEach(activity => {
-            content += `${activity.title} - ${activity.discipline} - ${activity.status}\n`;
         });
 
         const blob = new Blob([content], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `hck_tarefas_logs_${new Date().toISOString().slice(0,10)}.txt`;
+        a.download = `hck_logs_${new Date().toISOString().slice(0,10)}.txt`;
         a.click();
         URL.revokeObjectURL(url);
-        
-        sendToast('Logs exportados com sucesso!');
-        addNotification('success', 'Logs Exportados', 'Arquivo de logs gerado com sucesso.');
+        sendToast('📤 Logs exportados!');
     }
 
-    // Configurar UI - Versão aprimorada com todas as novas funcionalidades
-    function setupUI() {
-        logMessage('INFO','Configurando UI para HCK TAREFAS...');
-        try {
-            const fontLink = document.createElement('link'); 
-            fontLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap'; 
-            fontLink.rel = 'stylesheet'; 
-            document.head.appendChild(fontLink);
-        } catch (e) {
-            logMessage('WARN', 'Falha ao injetar Google Font (CSP?). Usando fontes do sistema.');
-        }
-        
-        const estilo = { 
-            cores: { 
-                fundo: '#1C1C1E', 
-                fundoSecundario: '#2C2C2E', 
-                fundoTerciario: '#3A3A3C', 
-                texto: '#F5F5F7', 
-                textoSecundario: '#8A8A8E', 
-                accent: '#FFFFFF', 
-                accentBg: '#007AFF', 
-                secondaryAccent: '#E5E5EA', 
-                secondaryAccentBg: '#3A3A3C', 
-                erro: '#FF453A', 
-                sucesso: '#32D74B', 
-                warn: '#FFD60A', 
-                info: '#0A84FF', 
-                logDebug: '#636366', 
-                borda: '#38383A', 
-                notificationBg: 'rgba(44, 44, 46, 0.85)', 
-                copyBtnBg: '#555555' 
-            }, 
-            sombras: { 
-                menu: '0 10px 35px rgba(0, 0, 0, 0.3)', 
-                botao: '0 2px 4px rgba(0, 0, 0, 0.2)', 
-                notification: '0 5px 20px rgba(0, 0, 0, 0.3)' 
-            }, 
-            radius: '14px', 
-            radiusSmall: '8px' 
-        };
-        
-        const getResponsiveSize = () => ({ 
-            menuWidth: isMobile ? '92vw' : (window.innerWidth < 768 ? '320px' : '380px'), 
-            fontSize: isMobile ? '12px' : (window.innerWidth < 768 ? '13px' : '14px'), 
-            buttonPadding: isMobile ? '8px 10px' : '9px 10px', 
-            titleSize: isMobile ? '15px' : '16px' 
-        });
-        
-        const container = document.createElement('div'); 
-        container.id = 'hck-tarefas-ui-bookmarklet';
-        container.style.cssText = `position: fixed; bottom: ${isMobile ? '60px' : '12px'}; right: ${isMobile ? '5px' : '12px'}; z-index: 10000; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; line-height: 1.4;`;
-        
-        const toggleBtn = document.createElement('button'); 
-        toggleBtn.id = 'hck-tarefas-toggle-btn'; 
-        toggleBtn.textContent = '📚 TAREFAS'; 
-        toggleBtn.style.cssText = `background: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; padding: ${isMobile ? '6px 12px' : '8px 18px'}; border: 1px solid ${estilo.cores.borda}; border-radius: 22px; cursor: pointer; font-weight: 600; font-size: ${isMobile ? '12px' : '15px'}; box-shadow: ${estilo.sombras.botao}; display: block; transition: all 0.35s ease-out; width: auto; min-width: ${isMobile ? '60px' : '70px'}; text-align: center;`;
-        
-        const sizes = getResponsiveSize();
-        const menu = document.createElement('div'); 
-        menu.id = 'hck-tarefas-menu'; 
-        menu.style.cssText = `background: ${estilo.cores.fundo}; width: ${sizes.menuWidth}; padding: 10px; border-radius: ${estilo.radius}; box-shadow: ${estilo.sombras.menu}; display: none; flex-direction: column; gap: 8px; border: 1px solid ${estilo.cores.borda}; opacity: 0; transform: translateY(15px) scale(0.95); transition: opacity 0.35s ease-out, transform 0.35s ease-out; position: fixed; bottom: ${isMobile ? '70px' : '70px'}; right: ${isMobile ? '5px' : '12px'}; max-height: ${isMobile ? '85vh' : '85vh'}; overflow-y: auto; scrollbar-width: none;`;
-        
-        // Adicionando estilo para scrollbar do menu
-        const style = document.createElement('style');
-        style.textContent = `#hck-tarefas-menu::-webkit-scrollbar { display: none; }`;
-        document.head.appendChild(style);
-        
-        const header = document.createElement('div'); 
-        header.style.cssText = `display: flex; align-items: center; justify-content: center; position: relative; width: 100%; margin-bottom: 4px;`;
-        
-        const title = document.createElement('div'); 
-        title.textContent = `${SCRIPT_NAME} v${SCRIPT_VERSION}`; 
-        title.style.cssText = `font-size: ${sizes.titleSize}; font-weight: 600; text-align: center; flex-grow: 1; color: ${estilo.cores.texto};`;
-        
-        const closeBtn = document.createElement('button'); 
-        closeBtn.innerHTML = '×'; 
-        closeBtn.setAttribute('aria-label', 'Fechar Menu'); 
-        closeBtn.style.cssText = `position: absolute; top: -4px; right: -4px; background: ${estilo.cores.fundoSecundario}; border: none; color: ${estilo.cores.textoSecundario}; font-size: 18px; font-weight: 600; cursor: pointer; padding: 0; line-height: 1; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;`;
-        
-        header.append(title, closeBtn);
-        
-        // Tabs
-        const tabsContainer = document.createElement('div');
-        tabsContainer.style.cssText = `display: flex; gap: 4px; margin-bottom: 8px; border-bottom: 1px solid ${estilo.cores.borda}; padding-bottom: 4px;`;
-        
-        const tabs = ['📊 Painel', '🤖 IA', '⚙️ Config', '📈 Stats', '🔔 Notif'];
-        let activeTab = '📊 Painel';
-        
-        const tabButtons = tabs.map(tabText => {
-            const btn = document.createElement('button');
-            btn.textContent = tabText;
-            btn.style.cssText = `flex: 1; padding: 4px 0; background: ${tabText === activeTab ? estilo.cores.accentBg : 'transparent'}; color: ${tabText === activeTab ? estilo.cores.accent : estilo.cores.textoSecundario}; border: none; border-radius: ${estilo.radiusSmall}; font-size: ${isMobile ? '10px' : '11px'}; font-weight: 500; cursor: pointer; transition: all 0.2s ease;`;
-            btn.dataset.tab = tabText;
-            return btn;
-        });
-        
-        tabButtons.forEach(btn => tabsContainer.appendChild(btn));
-        
-        // Tab content container
-        const tabContent = document.createElement('div');
-        tabContent.id = 'hck-tab-content';
-        tabContent.style.cssText = `flex: 1; overflow-y: auto; max-height: ${isMobile ? '400px' : '450px'};`;
-        
-        // Painel de Atividade
-        const activityPanel = document.createElement('div');
-        activityPanel.id = 'hck-activity-panel';
-        activityPanel.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; margin-bottom: 8px;`;
-        activityPanel.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span style="font-size: 11px; font-weight: 600; color: ${estilo.cores.textoSecundario};">📚 Atividade Atual</span>
-                <span id="activity-status" style="font-size: 10px; padding: 2px 8px; border-radius: 10px; background: ${estilo.cores.fundoTerciario}; color: ${estilo.cores.textoSecundario};">Aguardando...</span>
-            </div>
-            <div id="activity-content" style="font-size: 12px; color: ${estilo.cores.texto};">
-                <div style="margin-bottom: 2px;"><strong id="activity-title">Nenhuma atividade detectada</strong></div>
-                <div style="display: flex; gap: 8px; flex-wrap: wrap; font-size: 11px; color: ${estilo.cores.textoSecundario};">
-                    <span id="activity-discipline">-</span>
-                    <span id="activity-questions">0 questões</span>
-                    <span id="activity-progress">Progresso: 0%</span>
-                </div>
-                <div id="activity-types" style="margin-top: 4px; font-size: 10px; color: ${estilo.cores.textoSecundario};"></div>
-            </div>
-        `;
-        
-        // IA Chat
-        const chatPanel = document.createElement('div');
-        chatPanel.id = 'hck-chat-panel';
-        chatPanel.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; display: none; flex-direction: column; gap: 6px; max-height: 350px;`;
-        chatPanel.innerHTML = `
-            <div id="chat-messages" style="flex: 1; overflow-y: auto; max-height: 280px; font-size: 12px; color: ${estilo.cores.texto}; padding: 4px; background: ${estilo.cores.fundo}; border-radius: ${estilo.radiusSmall}; min-height: 100px;">
-                <div style="text-align: center; color: ${estilo.cores.textoSecundario}; padding: 20px 0;">Pergunte algo sobre a atividade atual</div>
-            </div>
-            <div style="display: flex; gap: 4px;">
-                <input id="chat-input" type="text" placeholder="Digite sua pergunta..." style="flex: 1; padding: 6px 8px; border-radius: ${estilo.radiusSmall}; border: 1px solid ${estilo.cores.borda}; background: ${estilo.cores.fundo}; color: ${estilo.cores.texto}; font-size: 12px;">
-                <button id="chat-send" style="padding: 6px 12px; background: ${estilo.cores.accentBg}; color: ${estilo.cores.accent}; border: none; border-radius: ${estilo.radiusSmall}; cursor: pointer; font-size: 12px;">Enviar</button>
-            </div>
-        `;
-        
-        // Configurações
-        const settingsPanel = document.createElement('div');
-        settingsPanel.id = 'hck-settings-panel';
-        settingsPanel.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; display: none;`;
-        
-        const settingsList = [
-            { id: 'notifications', label: '🔔 Notificações', default: true },
-            { id: 'aiEnabled', label: '🤖 IA Integrada', default: true },
-            { id: 'autoCorrect', label: '🔄 Correção Automática', default: true },
-            { id: 'sounds', label: '🔊 Sons', default: false },
-            { id: 'autoPanel', label: '📋 Painel Automático', default: true },
-            { id: 'autoRefresh', label: '🔄 Atualização Automática', default: true }
-        ];
-        
-        let settingsHTML = '<div style="font-size: 12px; font-weight: 600; color: ${estilo.cores.textoSecundario}; margin-bottom: 6px;">⚙️ Configurações</div>';
-        settingsList.forEach(setting => {
-            const isChecked = STATE.settings[setting.id] !== undefined ? STATE.settings[setting.id] : setting.default;
-            settingsHTML += `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid ${estilo.cores.borda};">
-                    <span style="font-size: 12px; color: ${estilo.cores.texto};">${setting.label}</span>
-                    <label style="position: relative; display: inline-block; width: 40px; height: 22px;">
-                        <input type="checkbox" id="setting-${setting.id}" ${isChecked ? 'checked' : ''} style="opacity: 0; width: 0; height: 0;">
-                        <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: ${isChecked ? estilo.cores.accentBg : estilo.cores.fundoTerciario}; transition: .3s; border-radius: 22px;"></span>
-                        <span style="position: absolute; content: ''; height: 16px; width: 16px; left: 3px; bottom: 3px; background: ${estilo.cores.accent}; transition: .3s; border-radius: 50%; transform: ${isChecked ? 'translateX(18px)' : 'none'};"></span>
-                    </label>
-                </div>
-            `;
-        });
-        settingsPanel.innerHTML = settingsHTML;
-        
-        // Stats avançados
-        const statsPanel = document.createElement('div');
-        statsPanel.id = 'hck-stats-panel';
-        statsPanel.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; display: none;`;
-        statsPanel.innerHTML = `
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 11px;">
-                <div><span style="color: ${estilo.cores.textoSecundario};">Processadas:</span> <span id="stat-total">0</span></div>
-                <div><span style="color: ${estilo.cores.textoSecundario};">Corrigidas:</span> <span id="stat-corrected" style="color: ${estilo.cores.sucesso};">0</span></div>
-                <div><span style="color: ${estilo.cores.textoSecundario};">Falhas:</span> <span id="stat-failed" style="color: ${estilo.cores.erro};">0</span></div>
-                <div><span style="color: ${estilo.cores.textoSecundario};">Tempo médio:</span> <span id="stat-avgtime">0ms</span></div>
-                <div><span style="color: ${estilo.cores.textoSecundario};">Sessão:</span> <span id="stat-session">0m</span></div>
-                <div><span style="color: ${estilo.cores.textoSecundario};">Atividades:</span> <span id="stat-activities">0</span></div>
-            </div>
-            <div style="margin-top: 4px; font-size: 10px; color: ${estilo.cores.textoSecundario};">
-                <strong>Últimas atividades:</strong>
-                <div id="recent-activities" style="margin-top: 2px;"></div>
-            </div>
-        `;
-        
-        // Notificações
-        const notificationsPanel = document.createElement('div');
-        notificationsPanel.id = 'hck-notifications-panel';
-        notificationsPanel.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; display: none; max-height: 300px; overflow-y: auto;`;
-        notificationsPanel.innerHTML = `
-            <div style="font-size: 12px; font-weight: 600; color: ${estilo.cores.textoSecundario}; margin-bottom: 6px;">🔔 Histórico de Notificações</div>
-            <div id="notifications-list" style="font-size: 11px; color: ${estilo.cores.texto};"></div>
-        `;
-        
-        // Adicionar painéis ao tabContent
-        tabContent.appendChild(activityPanel);
-        tabContent.appendChild(chatPanel);
-        tabContent.appendChild(settingsPanel);
-        tabContent.appendChild(statsPanel);
-        tabContent.appendChild(notificationsPanel);
-        
-        // Barra de Progresso
-        const progressContainer = document.createElement('div');
-        progressContainer.id = 'hck-progress-container';
-        progressContainer.style.cssText = `display: none; background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 6px 8px; margin-bottom: 6px;`;
-        progressContainer.innerHTML = `
-            <div style="display: flex; justify-content: space-between; font-size: 10px; color: ${estilo.cores.textoSecundario}; margin-bottom: 2px;">
-                <span id="progress-message">Processando...</span>
-                <span id="progress-percent">0%</span>
-            </div>
-            <div style="width: 100%; height: 4px; background: ${estilo.cores.fundoTerciario}; border-radius: 2px; overflow: hidden;">
-                <div id="progress-bar" style="height: 100%; width: 0%; background: ${estilo.cores.accentBg}; transition: width 0.3s ease;"></div>
-            </div>
-        `;
-        
-        // Status Section
-        const statusSection = document.createElement('div');
-        statusSection.style.cssText = `background: ${estilo.cores.fundoSecundario}; border-radius: ${estilo.radiusSmall}; padding: 8px; margin-bottom: 8px;`;
-        
-        const statusTitle = document.createElement('div');
-        statusTitle.textContent = 'Status';
-        statusTitle.style.cssText = `font-size: 11px; font-weight: 600; color: ${estilo.cores.textoSecundario}; margin-bottom: 4px;`;
-        
-        const statusContent = document.createElement('div');
-        statusContent.id = 'status-content';
-        statusContent.style.cssText = `font-size: ${sizes.fontSize}; color: ${estilo.cores.texto};`;
-        statusContent.innerHTML = `
-            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>Script:</span><span id="script-status" style="color: ${STATE.isActive ? estilo.cores.sucesso : estilo.cores.erro};">${STATE.isActive ? '✅ Ativo' : '❌ Inativo'}</span></div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>Interceptação:</span><span id="intercept-status" style="color: ${STATE.interceptEnabled ? estilo.cores.sucesso : estilo.cores.erro};">${STATE.interceptEnabled ? '✅ Ativa' : '❌ Inativa'}</span></div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>Token:</span><span id="token-status" style="color: ${STATE.capturedLoginData ? estilo.cores.sucesso : estilo.cores.warn};">${STATE.capturedLoginData ? '✅ Capturado' : '⏳ Aguardando'}</span></div>
-            <div style="display: flex; justify-content: space-between;"><span>API:</span><span id="api-status" style="color: ${estilo.cores.sucesso};">✅ Online</span></div>
-        `;
-        
-        statusSection.append(statusTitle, statusContent);
-        
-        // Buttons
-        const buttonBaseStyle = `width: 100%; padding: ${sizes.buttonPadding}; border: none; border-radius: ${estilo.radiusSmall}; cursor: pointer; font-size: ${sizes.fontSize}; font-weight: 500; margin-bottom: 0; display: flex; align-items: center; justify-content: center; gap: 6px; transition: opacity 0.2s ease, background-color 0.2s ease, color 0.2s ease;`;
-        const buttonPrimaryStyle = `${buttonBaseStyle} background: ${estilo.cores.accentBg}; color: ${estilo.cores.accent};`;
-        const buttonSecondaryStyle = `${buttonBaseStyle} background: ${estilo.cores.secondaryAccentBg}; color: ${estilo.cores.secondaryAccent}; border: 1px solid ${estilo.cores.borda};`;
-        const buttonDangerStyle = `${buttonBaseStyle} background: ${estilo.cores.erro}; color: ${estilo.cores.accent};`;
-        
-        // Adicionando estilos
-        const style4 = document.createElement('style');
-        style4.textContent = `
-            .hck-tarefas-btn-primary:hover { opacity: 0.85; }
-            .hck-tarefas-btn-primary:disabled { background-color: ${estilo.cores.fundoSecundario}; color: ${estilo.cores.textoSecundario}; opacity: 0.6; cursor: not-allowed; }
-            .hck-tarefas-btn-secondary:hover { background: ${estilo.cores.fundoTerciario}; opacity: 1; }
-            .hck-tarefas-btn-danger:hover { opacity: 0.85; }
-        `;
-        document.head.appendChild(style4);
-        
-        const buttonContainer = document.createElement('div');
-        buttonContainer.style.cssText = `display: grid; grid-template-columns: 1fr 1fr; gap: 4px;`;
-        
-        const toggleInterceptBtn = document.createElement('button'); 
-        toggleInterceptBtn.textContent = `${STATE.interceptEnabled ? '⏸️ Desativar' : '▶️ Ativar'} Interceptação`; 
-        toggleInterceptBtn.className = 'hck-tarefas-btn-primary';
-        toggleInterceptBtn.style.cssText = buttonPrimaryStyle;
-        
-        const clearDataBtn = document.createElement('button'); 
-        clearDataBtn.textContent = '🧹 Limpar Dados'; 
-        clearDataBtn.className = 'hck-tarefas-btn-secondary';
-        clearDataBtn.style.cssText = buttonSecondaryStyle;
-        
-        const diagnosticBtn = document.createElement('button'); 
-        diagnosticBtn.textContent = '🩺 Diagnóstico'; 
-        diagnosticBtn.className = 'hck-tarefas-btn-secondary';
-        diagnosticBtn.style.cssText = buttonSecondaryStyle;
-        
-        const exportLogsBtn = document.createElement('button'); 
-        exportLogsBtn.textContent = '📤 Exportar Logs'; 
-        exportLogsBtn.className = 'hck-tarefas-btn-secondary';
-        exportLogsBtn.style.cssText = buttonSecondaryStyle;
-        
-        const refreshBtn = document.createElement('button'); 
-        refreshBtn.textContent = '🔄 Atualizar'; 
-        refreshBtn.className = 'hck-tarefas-btn-primary';
-        refreshBtn.style.cssText = buttonPrimaryStyle;
-        
-        buttonContainer.append(toggleInterceptBtn, clearDataBtn, diagnosticBtn, exportLogsBtn, refreshBtn);
-        
-        // Credits
-        const credits = document.createElement('div');
-        credits.innerHTML = `<span style="font-weight: 600; letter-spacing: 0.5px;">v${SCRIPT_VERSION}</span> <span style="margin: 0 4px;">|</span> <span style="opacity: 0.7;">by Hackermoon</span>`;
-        credits.style.cssText = `text-align: center; font-size: 10px; font-weight: 500; color: ${estilo.cores.textoSecundario}; margin-top: 6px; padding-top: 6px; border-top: 1px solid ${estilo.cores.borda}; opacity: 0.9;`;
-        
-        const notificationContainer = document.createElement('div'); 
-        notificationContainer.id = 'hck-tarefas-notifications'; 
-        notificationContainer.style.cssText = `position: fixed; bottom: ${isMobile ? '10px' : '15px'}; left: 50%; transform: translateX(-50%); z-index: 10002; display: flex; flex-direction: column; align-items: center; gap: 10px; width: auto; max-width: 90%;`;
-        
-        STATE.notificationContainer = notificationContainer;
-        menu.append(header, tabsContainer, tabContent, progressContainer, statusSection, buttonContainer, credits);
-        container.append(menu, toggleBtn);
-        document.body.appendChild(container); 
-        document.body.appendChild(notificationContainer);
-        logMessage('INFO', 'Elementos da UI adicionados à página.');
+    // ==================== PAINEL UI ====================
 
-        // Funções para atualizar a UI
-        function updateStatusDisplay() {
-            const scriptStatus = document.getElementById('script-status');
-            const interceptStatus = document.getElementById('intercept-status');
-            const tokenStatus = document.getElementById('token-status');
-            const apiStatus = document.getElementById('api-status');
-            
-            if (scriptStatus) {
-                scriptStatus.textContent = STATE.isActive ? '✅ Ativo' : '❌ Inativo';
-                scriptStatus.style.color = STATE.isActive ? estilo.cores.sucesso : estilo.cores.erro;
-            }
-            
-            if (interceptStatus) {
-                interceptStatus.textContent = STATE.interceptEnabled ? '✅ Ativa' : '❌ Inativa';
-                interceptStatus.style.color = STATE.interceptEnabled ? estilo.cores.sucesso : estilo.cores.erro;
-            }
-            
-            if (tokenStatus) {
-                tokenStatus.textContent = STATE.capturedLoginData ? '✅ Capturado' : '⏳ Aguardando';
-                tokenStatus.style.color = STATE.capturedLoginData ? estilo.cores.sucesso : estilo.cores.warn;
-            }
-            
-            if (apiStatus) {
-                apiStatus.textContent = STATE.apiMonitor.status === 'online' ? '✅ Online' : '❌ Offline';
-                apiStatus.style.color = STATE.apiMonitor.status === 'online' ? estilo.cores.sucesso : estilo.cores.erro;
+    function buildUI() {
+        logMessage('INFO', 'Construindo painel...');
+
+        const cores = {
+            bg: '#0D0D0D',
+            bgSec: '#1A1A1A',
+            bgTer: '#2A2A2A',
+            texto: '#F0F0F0',
+            textoSec: '#888888',
+            accent: '#00D4FF',
+            accentBg: '#007AFF',
+            sucesso: '#00E676',
+            erro: '#FF1744',
+            warn: '#FFEA00',
+            borda: '#333333'
+        };
+
+        // Container principal
+        const container = document.createElement('div');
+        container.id = 'hck-tarefas-ui-bookmarklet';
+        container.style.cssText = `
+            position: fixed;
+            bottom: ${isMobile ? '70px' : '20px'};
+            right: ${isMobile ? '10px' : '20px'};
+            z-index: 99999;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.5;
+        `;
+
+        // Botão toggle flutuante
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'hck-toggle-btn';
+        toggleBtn.innerHTML = '📚';
+        toggleBtn.style.cssText = `
+            width: ${isMobile ? '56px' : '48px'};
+            height: ${isMobile ? '56px' : '48px'};
+            border-radius: 50%;
+            background: ${cores.bgSec};
+            color: ${cores.texto};
+            border: 2px solid ${cores.borda};
+            font-size: ${isMobile ? '24px' : '20px'};
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        toggleBtn.title = 'HCK TAREFAS';
+
+        // Painel principal
+        const panel = document.createElement('div');
+        panel.id = 'hck-panel';
+        panel.style.cssText = `
+            position: fixed;
+            bottom: ${isMobile ? '130px' : '80px'};
+            right: ${isMobile ? '10px' : '20px'};
+            width: ${isMobile ? '92vw' : '420px'};
+            max-width: ${isMobile ? '400px' : '420px'};
+            max-height: ${isMobile ? '80vh' : '75vh'};
+            background: ${cores.bg};
+            border-radius: 16px;
+            border: 1px solid ${cores.borda};
+            box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            font-size: 13px;
+        `;
+
+        // ============ CABEÇALHO ============
+        const header = document.createElement('div');
+        header.style.cssText = `
+            padding: 12px 16px;
+            background: ${cores.bgSec};
+            border-bottom: 1px solid ${cores.borda};
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        `;
+
+        const title = document.createElement('span');
+        title.innerHTML = `📚 ${SCRIPT_NAME} <span style="color:${cores.textoSec};font-size:10px;">v${SCRIPT_VERSION}</span>`;
+        title.style.cssText = `font-weight: 600; color: ${cores.texto}; font-size: 14px;`;
+
+        const headerActions = document.createElement('div');
+        headerActions.style.cssText = 'display: flex; gap: 6px;';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.innerHTML = '✕';
+        closeBtn.style.cssText = `
+            background: transparent;
+            border: none;
+            color: ${cores.textoSec};
+            font-size: 16px;
+            cursor: pointer;
+            padding: 0 4px;
+            transition: color 0.2s;
+        `;
+        closeBtn.onmouseover = () => closeBtn.style.color = cores.erro;
+        closeBtn.onmouseout = () => closeBtn.style.color = cores.textoSec;
+
+        headerActions.appendChild(closeBtn);
+        header.append(title, headerActions);
+
+        // ============ CORPO ============
+        const body = document.createElement('div');
+        body.style.cssText = `
+            padding: 12px 16px;
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            scrollbar-width: thin;
+            scrollbar-color: ${cores.borda} transparent;
+        `;
+        body.id = 'hck-panel-body';
+
+        // ============ SEÇÃO: STATUS ============
+        const statusSection = createSection('📊 Status');
+        statusSection.innerHTML += `
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 12px;">
+                <div><span style="color:${cores.textoSec};">Script:</span> <span id="hck-status-script" style="color:${cores.sucesso};">✅ Ativo</span></div>
+                <div><span style="color:${cores.textoSec};">Interceptação:</span> <span id="hck-status-intercept" style="color:${cores.sucesso};">✅ Ativa</span></div>
+                <div><span style="color:${cores.textoSec};">Token:</span> <span id="hck-status-token" style="color:${cores.warn};">⏳ Aguardando</span></div>
+                <div><span style="color:${cores.textoSec};">API:</span> <span id="hck-status-api" style="color:${cores.sucesso};">✅ Online</span></div>
+            </div>
+        `;
+        body.appendChild(statusSection);
+
+        // ============ SEÇÃO: ATIVIDADE ============
+        const activitySection = createSection('📖 Atividade Atual');
+        activitySection.id = 'hck-activity-section';
+        activitySection.innerHTML += `
+            <div id="hck-activity-content" style="font-size: 12px; color: ${cores.textoSec}; text-align: center; padding: 8px 0;">
+                ⏳ Aguardando atividade...
+            </div>
+        `;
+        body.appendChild(activitySection);
+
+        // ============ SEÇÃO: PROGRESSO ============
+        const progressSection = createSection('⏳ Progresso');
+        progressSection.id = 'hck-progress-section';
+        progressSection.style.display = 'none';
+        progressSection.innerHTML += `
+            <div style="display: flex; justify-content: space-between; font-size: 11px; color: ${cores.textoSec}; margin-bottom: 3px;">
+                <span id="hck-progress-msg">Processando...</span>
+                <span id="hck-progress-pct">0%</span>
+            </div>
+            <div style="width:100%; height:4px; background:${cores.bgTer}; border-radius:4px; overflow:hidden;">
+                <div id="hck-progress-bar" style="height:100%; width:0%; background:${cores.accentBg}; transition:width 0.4s ease;"></div>
+            </div>
+        `;
+        body.appendChild(progressSection);
+
+        // ============ SEÇÃO: ESTATÍSTICAS ============
+        const statsSection = createSection('📈 Estatísticas');
+        statsSection.innerHTML += `
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; text-align: center; font-size: 12px;">
+                <div><span style="color:${cores.textoSec};">Processadas</span><br><span id="hck-stat-total" style="font-weight:600;color:${cores.texto};">0</span></div>
+                <div><span style="color:${cores.textoSec};">Sucesso</span><br><span id="hck-stat-ok" style="font-weight:600;color:${cores.sucesso};">0</span></div>
+                <div><span style="color:${cores.textoSec};">Falhas</span><br><span id="hck-stat-fail" style="font-weight:600;color:${cores.erro};">0</span></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:11px; color:${cores.textoSec}; margin-top:4px;">
+                <span>Tempo médio: <span id="hck-stat-avg" style="color:${cores.texto};">0ms</span></span>
+                <span>Sessão: <span id="hck-stat-session" style="color:${cores.texto};">0m</span></span>
+            </div>
+        `;
+        body.appendChild(statsSection);
+
+        // ============ SEÇÃO: CHAT IA ============
+        const chatSection = createSection('🤖 Assistente IA');
+        chatSection.style.display = 'none';
+        chatSection.id = 'hck-chat-section';
+        chatSection.innerHTML += `
+            <div id="hck-chat-messages" style="
+                background: ${cores.bgSec};
+                border-radius: 8px;
+                padding: 8px 10px;
+                max-height: 150px;
+                overflow-y: auto;
+                font-size: 12px;
+                color: ${cores.texto};
+                min-height: 50px;
+                scrollbar-width: thin;
+                scrollbar-color: ${cores.borda} transparent;
+            ">
+                <div style="color:${cores.textoSec}; text-align:center; padding:10px 0;">Pergunte sobre a atividade atual</div>
+            </div>
+            <div style="display:flex; gap:6px; margin-top:6px;">
+                <input id="hck-chat-input" type="text" placeholder="Digite sua pergunta..." style="
+                    flex:1;
+                    padding:6px 10px;
+                    border-radius:8px;
+                    border:1px solid ${cores.borda};
+                    background:${cores.bgSec};
+                    color:${cores.texto};
+                    font-size:12px;
+                    outline:none;
+                ">
+                <button id="hck-chat-send" style="
+                    padding:6px 14px;
+                    border-radius:8px;
+                    border:none;
+                    background:${cores.accentBg};
+                    color:#fff;
+                    font-weight:600;
+                    font-size:12px;
+                    cursor:pointer;
+                ">Enviar</button>
+            </div>
+        `;
+        body.appendChild(chatSection);
+
+        // ============ SEÇÃO: CONFIGURAÇÕES ============
+        const settingsSection = createSection('⚙️ Configurações');
+        settingsSection.style.display = 'none';
+        settingsSection.id = 'hck-settings-section';
+        const settingsHTML = `
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; font-size:12px;">
+                <label style="display:flex; align-items:center; gap:6px; color:${cores.texto}; cursor:pointer;">
+                    <input type="checkbox" id="hck-set-notif" ${STATE.settings.notifications ? 'checked' : ''}>
+                    Notificações
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; color:${cores.texto}; cursor:pointer;">
+                    <input type="checkbox" id="hck-set-ai" ${STATE.settings.aiEnabled ? 'checked' : ''}>
+                    IA Integrada
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; color:${cores.texto}; cursor:pointer;">
+                    <input type="checkbox" id="hck-set-autocorrect" ${STATE.settings.autoCorrect ? 'checked' : ''}>
+                    Correção Automática
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; color:${cores.texto}; cursor:pointer;">
+                    <input type="checkbox" id="hck-set-autopanel" ${STATE.settings.autoPanel ? 'checked' : ''}>
+                    Painel Automático
+                </label>
+            </div>
+        `;
+        settingsSection.innerHTML += settingsHTML;
+        body.appendChild(settingsSection);
+
+        // ============ SEÇÃO: AÇÕES ============
+        const actionsSection = createSection('🔧 Ações');
+        actionsSection.innerHTML += `
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+                <button id="hck-btn-intercept" style="
+                    padding:6px 10px;
+                    border-radius:8px;
+                    border:1px solid ${cores.borda};
+                    background:${cores.bgSec};
+                    color:${cores.texto};
+                    font-size:12px;
+                    cursor:pointer;
+                    transition:all 0.2s;
+                ">⏸️ Desativar Intercept</button>
+                <button id="hck-btn-refresh" style="
+                    padding:6px 10px;
+                    border-radius:8px;
+                    border:1px solid ${cores.borda};
+                    background:${cores.bgSec};
+                    color:${cores.texto};
+                    font-size:12px;
+                    cursor:pointer;
+                    transition:all 0.2s;
+                ">🔄 Atualizar</button>
+                <button id="hck-btn-diagnostic" style="
+                    padding:6px 10px;
+                    border-radius:8px;
+                    border:1px solid ${cores.borda};
+                    background:${cores.bgSec};
+                    color:${cores.texto};
+                    font-size:12px;
+                    cursor:pointer;
+                    transition:all 0.2s;
+                ">🩺 Diagnóstico</button>
+                <button id="hck-btn-export" style="
+                    padding:6px 10px;
+                    border-radius:8px;
+                    border:1px solid ${cores.borda};
+                    background:${cores.bgSec};
+                    color:${cores.texto};
+                    font-size:12px;
+                    cursor:pointer;
+                    transition:all 0.2s;
+                ">📤 Exportar Logs</button>
+                <button id="hck-btn-clear" style="
+                    padding:6px 10px;
+                    border-radius:8px;
+                    border:1px solid ${cores.erro};
+                    background:transparent;
+                    color:${cores.erro};
+                    font-size:12px;
+                    cursor:pointer;
+                    transition:all 0.2s;
+                ">🧹 Limpar Dados</button>
+            </div>
+        `;
+        body.appendChild(actionsSection);
+
+        // ============ FOOTER ============
+        const footer = document.createElement('div');
+        footer.style.cssText = `
+            padding: 8px 16px;
+            background: ${cores.bgSec};
+            border-top: 1px solid ${cores.borda};
+            text-align: center;
+            font-size: 10px;
+            color: ${cores.textoSec};
+            flex-shrink: 0;
+        `;
+        footer.textContent = `by Hackermoon • ${SCRIPT_VERSION}`;
+
+        // ============ MONTAGEM ============
+        panel.append(header, body, footer);
+        container.append(toggleBtn, panel);
+        document.body.appendChild(container);
+
+        // ============ CONTROLES ============
+        let isPanelOpen = false;
+
+        function togglePanel(show) {
+            isPanelOpen = show !== undefined ? show : !isPanelOpen;
+            panel.style.display = isPanelOpen ? 'flex' : 'none';
+            toggleBtn.style.transform = isPanelOpen ? 'scale(0.9)' : 'scale(1)';
+            if (isPanelOpen) {
+                updateAll();
+                if (STATE.settings.autoPanel) fetchCurrentActivity().then(updateActivityUI);
             }
         }
-        
-        function updateStatsDisplay() {
-            const totalEl = document.getElementById('stat-total');
-            const correctedEl = document.getElementById('stat-corrected');
-            const failedEl = document.getElementById('stat-failed');
-            const avgTimeEl = document.getElementById('stat-avgtime');
-            const sessionEl = document.getElementById('stat-session');
-            const activitiesEl = document.getElementById('stat-activities');
-            
-            if (totalEl) totalEl.textContent = STATE.stats.totalProcessed || 0;
-            if (correctedEl) correctedEl.textContent = STATE.stats.totalCorrected || 0;
-            if (failedEl) failedEl.textContent = STATE.stats.totalFailed || 0;
-            if (avgTimeEl) avgTimeEl.textContent = STATE.stats.avgProcessingTime ? `${STATE.stats.avgProcessingTime}ms` : '0ms';
-            
-            if (sessionEl) {
-                const elapsed = Math.floor((Date.now() - STATE.stats.sessionStart) / 60000);
-                sessionEl.textContent = elapsed < 60 ? `${elapsed}m` : `${Math.floor(elapsed / 60)}h${elapsed % 60}m`;
-            }
-            
-            if (activitiesEl) activitiesEl.textContent = STATE.activityHistory.length;
-            
-            // Atualizar atividades recentes
-            const recentEl = document.getElementById('recent-activities');
-            if (recentEl) {
-                recentEl.innerHTML = STATE.activityHistory.slice(0, 3).map(a => 
-                    `<div style="display: flex; justify-content: space-between; margin: 2px 0; font-size: 10px;">
-                        <span>${a.title || 'Sem título'}</span>
-                        <span style="color: ${estilo.cores.textoSecundario};">${a.status || 'unknown'}</span>
-                    </div>`
-                ).join('');
-            }
-            
-            // Atualizar estatísticas do painel principal
-            const totalIntercepted = document.getElementById('total-intercepted');
-            const totalCorrected = document.getElementById('total-corrected');
-            const totalFailed = document.getElementById('total-failed');
-            
-            if (totalIntercepted) totalIntercepted.textContent = STATE.stats.totalIntercepted;
-            if (totalCorrected) totalCorrected.textContent = STATE.stats.totalCorrected;
-            if (totalFailed) totalFailed.textContent = STATE.stats.totalFailed;
+
+        toggleBtn.addEventListener('click', () => togglePanel());
+        closeBtn.addEventListener('click', () => togglePanel(false));
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && isPanelOpen) togglePanel(false);
+        });
+
+        // ============ HELPERS UI ============
+        function createSection(title) {
+            const section = document.createElement('div');
+            section.style.cssText = `
+                background: ${cores.bgSec};
+                border-radius: 10px;
+                padding: 10px 12px;
+                border: 1px solid ${cores.borda};
+            `;
+            const titleEl = document.createElement('div');
+            titleEl.textContent = title;
+            titleEl.style.cssText = `
+                font-size: 11px;
+                font-weight: 600;
+                color: ${cores.textoSec};
+                margin-bottom: 6px;
+                letter-spacing: 0.3px;
+            `;
+            section.appendChild(titleEl);
+            return section;
         }
-        
-        function updateCorrectedTasksList() {
-            const tasksContent = document.getElementById('tasks-content');
-            if (!tasksContent) return;
+
+        function updateStatusUI() {
+            const scriptEl = document.getElementById('hck-status-script');
+            const interceptEl = document.getElementById('hck-status-intercept');
+            const tokenEl = document.getElementById('hck-status-token');
+            const apiEl = document.getElementById('hck-status-api');
             
-            if (STATE.correctedTasks.length === 0) {
-                tasksContent.innerHTML = `<div style="text-align: center; color: ${estilo.cores.textoSecundario}; font-size: 12px;">Nenhuma tarefa processada ainda</div>`;
-                return;
+            if (scriptEl) {
+                scriptEl.textContent = STATE.isActive ? '✅ Ativo' : '❌ Inativo';
+                scriptEl.style.color = STATE.isActive ? cores.sucesso : cores.erro;
             }
-            
-            const recentTasks = STATE.correctedTasks.slice(-5).reverse();
-            tasksContent.innerHTML = recentTasks.map(task => {
-                const time = new Date(task.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const statusColor = task.status === 'success' ? estilo.cores.sucesso : estilo.cores.erro;
-                const statusText = task.status === 'success' ? '✅ Sucesso' : '❌ Falha';
-                return `<div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px;"><span>Tarefa ${task.taskId}</span><span style="color: ${statusColor};">${statusText} (${time})</span></div>`;
-            }).join('');
-        }
-        
-        function updateNotificationsUI() {
-            const list = document.getElementById('notifications-list');
-            if (!list) return;
-            
-            if (STATE.notifications.length === 0) {
-                list.innerHTML = '<div style="text-align: center; color: ${estilo.cores.textoSecundario}; padding: 10px;">Nenhuma notificação</div>';
-                return;
+            if (interceptEl) {
+                interceptEl.textContent = STATE.interceptEnabled ? '✅ Ativa' : '❌ Inativa';
+                interceptEl.style.color = STATE.interceptEnabled ? cores.sucesso : cores.erro;
             }
-            
-            list.innerHTML = STATE.notifications.slice(0, 20).map(n => {
-                const colors = {
-                    info: estilo.cores.info,
-                    success: estilo.cores.sucesso,
-                    warning: estilo.cores.warn,
-                    error: estilo.cores.erro
-                };
-                const color = colors[n.type] || estilo.cores.textoSecundario;
-                const time = new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                return `<div style="padding: 4px 0; border-bottom: 1px solid ${estilo.cores.borda};">
-                    <div style="display: flex; justify-content: space-between;">
-                        <span style="color: ${color}; font-weight: 500;">${n.title}</span>
-                        <span style="color: ${estilo.cores.textoSecundario}; font-size: 10px;">${time}</span>
-                    </div>
-                    <div style="font-size: 11px; color: ${estilo.cores.textoSecundario};">${n.message}</div>
-                </div>`;
-            }).join('');
+            if (tokenEl) {
+                tokenEl.textContent = STATE.capturedLoginData ? '✅ Capturado' : '⏳ Aguardando';
+                tokenEl.style.color = STATE.capturedLoginData ? cores.sucesso : cores.warn;
+            }
+            if (apiEl) {
+                apiEl.textContent = STATE.apiMonitor.status === 'online' ? '✅ Online' : '❌ Offline';
+                apiEl.style.color = STATE.apiMonitor.status === 'online' ? cores.sucesso : cores.erro;
+            }
         }
-        
-        function updateActivityPanel(activity) {
-            const titleEl = document.getElementById('activity-title');
-            const disciplineEl = document.getElementById('activity-discipline');
-            const questionsEl = document.getElementById('activity-questions');
-            const progressEl = document.getElementById('activity-progress');
-            const statusEl = document.getElementById('activity-status');
-            const typesEl = document.getElementById('activity-types');
-            
+
+        function updateActivityUI(activity) {
+            const content = document.getElementById('hck-activity-content');
+            if (!content) return;
+
             if (!activity) {
-                if (titleEl) titleEl.textContent = 'Nenhuma atividade detectada';
-                if (disciplineEl) disciplineEl.textContent = '-';
-                if (questionsEl) questionsEl.textContent = '0 questões';
-                if (progressEl) progressEl.textContent = 'Progresso: 0%';
-                if (statusEl) {
-                    statusEl.textContent = '⏳ Aguardando';
-                    statusEl.style.background = estilo.cores.fundoTerciario;
-                }
-                if (typesEl) typesEl.textContent = '';
+                content.innerHTML = `<div style="text-align:center;color:${cores.textoSec};padding:8px 0;">⏳ Nenhuma atividade detectada</div>`;
                 return;
             }
+
+            const statusMap = {
+                'pending': '⏳ Pendente',
+                'in_progress': '🔄 Em andamento',
+                'completed': '✅ Concluída',
+                'expired': '⏰ Expirada'
+            };
+            const statusColor = {
+                'pending': cores.warn,
+                'in_progress': cores.accent,
+                'completed': cores.sucesso,
+                'expired': cores.erro
+            };
+
+            content.innerHTML = `
+                <div style="font-weight:500;color:${cores.texto};margin-bottom:2px;">${activity.title}</div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:${cores.textoSec};">
+                    <span>📖 ${activity.discipline}</span>
+                    <span>📝 ${activity.questionsCount || 0} questões</span>
+                    <span style="color:${statusColor[activity.status] || cores.textoSec};">${statusMap[activity.status] || activity.status}</span>
+                    <span>📊 ${activity.progress || 0}%</span>
+                </div>
+                ${activity.questionsTypes?.length ? `<div style="font-size:10px;color:${cores.textoSec};margin-top:2px;">📌 ${activity.questionsTypes.join(' • ')}</div>` : ''}
+            `;
+        }
+
+        function updateStatsUI() {
+            const total = document.getElementById('hck-stat-total');
+            const ok = document.getElementById('hck-stat-ok');
+            const fail = document.getElementById('hck-stat-fail');
+            const avg = document.getElementById('hck-stat-avg');
+            const session = document.getElementById('hck-stat-session');
+
+            if (total) total.textContent = STATE.stats.totalProcessed || 0;
+            if (ok) ok.textContent = STATE.stats.totalCorrected || 0;
+            if (fail) fail.textContent = STATE.stats.totalFailed || 0;
+            if (avg) avg.textContent = STATE.stats.avgProcessingTime ? `${STATE.stats.avgProcessingTime}ms` : '0ms';
             
-            if (titleEl) titleEl.textContent = activity.title || 'Atividade sem título';
-            if (disciplineEl) disciplineEl.textContent = activity.discipline || 'Disciplina não informada';
-            if (questionsEl) questionsEl.textContent = `${activity.questionsCount || 0} questões`;
-            if (progressEl) progressEl.textContent = `Progresso: ${activity.progress || 0}%`;
-            
-            if (statusEl) {
-                const statusMap = {
-                    'pending': '⏳ Pendente',
-                    'in_progress': '🔄 Em andamento',
-                    'completed': '✅ Concluída',
-                    'expired': '⏰ Expirada',
-                    'unknown': '📌 Status desconhecido'
-                };
-                statusEl.textContent = statusMap[activity.status] || activity.status || '📌 Desconhecido';
-                statusEl.style.background = activity.status === 'completed' ? estilo.cores.sucesso : 
-                                           activity.status === 'in_progress' ? estilo.cores.info : 
-                                           estilo.cores.fundoTerciario;
-                statusEl.style.color = activity.status === 'completed' ? estilo.cores.fundo : 
-                                      activity.status === 'in_progress' ? estilo.cores.fundo : 
-                                      estilo.cores.texto;
-            }
-            
-            if (typesEl) {
-                if (activity.questionsTypes && activity.questionsTypes.length > 0) {
-                    typesEl.textContent = `📝 ${activity.questionsTypes.join(' • ')}`;
-                } else {
-                    typesEl.textContent = 'Tipos não especificados';
-                }
+            if (session) {
+                const elapsed = Math.floor((Date.now() - STATE.stats.sessionStart) / 60000);
+                session.textContent = elapsed < 60 ? `${elapsed}m` : `${Math.floor(elapsed/60)}h${elapsed%60}m`;
             }
         }
-        
+
         function updateProgressUI() {
-            const container = document.getElementById('hck-progress-container');
-            const bar = document.getElementById('progress-bar');
-            const message = document.getElementById('progress-message');
-            const percent = document.getElementById('progress-percent');
-            
-            if (!container) return;
-            
+            const section = document.getElementById('hck-progress-section');
+            const bar = document.getElementById('hck-progress-bar');
+            const msg = document.getElementById('hck-progress-msg');
+            const pct = document.getElementById('hck-progress-pct');
+
+            if (!section) return;
+
             if (STATE.progress.visible) {
-                container.style.display = 'block';
-                const pct = STATE.progress.total > 0 ? Math.round((STATE.progress.current / STATE.progress.total) * 100) : 0;
-                if (bar) bar.style.width = `${pct}%`;
-                if (message) message.textContent = STATE.progress.message || 'Processando...';
-                if (percent) percent.textContent = `${pct}%`;
+                section.style.display = 'block';
+                const percent = STATE.progress.total > 0 ? Math.round((STATE.progress.current / STATE.progress.total) * 100) : 0;
+                if (bar) bar.style.width = `${Math.min(percent, 100)}%`;
+                if (msg) msg.textContent = STATE.progress.message || 'Processando...';
+                if (pct) pct.textContent = `${Math.min(percent, 100)}%`;
             } else {
-                container.style.display = 'none';
+                section.style.display = 'none';
                 if (bar) bar.style.width = '0%';
             }
         }
-        
-        // Expondo funções globalmente
-        window.updateStatusDisplay = updateStatusDisplay;
-        window.updateStatsDisplay = updateStatsDisplay;
-        window.updateCorrectedTasksList = updateCorrectedTasksList;
-        window.updateActivityPanel = updateActivityPanel;
-        window.updateNotificationsUI = updateNotificationsUI;
-        window.updateProgressUI = updateProgressUI;
 
-        // Menu toggle
-        const toggleMenu = (show) => { 
-            const duration = 350; 
-            if (show) { 
-                logMessage('DEBUG', 'Mostrando menu...'); 
-                menu.style.display = 'flex'; 
-                toggleBtn.style.opacity = '0'; 
-                toggleBtn.style.transform = 'scale(0.8) translateY(10px)'; 
-                setTimeout(() => { 
-                    menu.style.opacity = '1'; 
-                    menu.style.transform = 'translateY(0) scale(1)'; 
-                    toggleBtn.style.display = 'none'; 
-                }, 10); 
-            } else { 
-                logMessage('DEBUG', 'Escondendo menu...'); 
-                menu.style.opacity = '0'; 
-                menu.style.transform = 'translateY(15px) scale(0.95)'; 
-                setTimeout(() => { 
-                    menu.style.display = 'none'; 
-                    toggleBtn.style.display = 'block'; 
-                    requestAnimationFrame(() => { 
-                        toggleBtn.style.opacity = '1'; 
-                        toggleBtn.style.transform = 'scale(1) translateY(0)'; 
-                    }); 
-                }, duration); 
-            } 
-        };
-        
-        // Adicionar eventos de toque para dispositivos móveis
-        const addTouchEvent = (element, callback) => {
-            element.addEventListener('click', callback);
-            if (isMobile) {
-                element.addEventListener('touchstart', (e) => {
-                    e.preventDefault();
-                    callback();
-                });
-            }
-        };
-        
-        addTouchEvent(toggleBtn, () => toggleMenu(true)); 
-        addTouchEvent(closeBtn, () => toggleMenu(false));
-        
-        // Logs modal (mantido para compatibilidade)
-        const hideLogs = () => { 
-            if (STATE.logModal) { 
-                STATE.logModal.style.display = 'none'; 
-                logMessage('DEBUG', 'Escondendo logs.'); 
-            } 
-        };
-        
-        document.addEventListener('keydown', (e) => { 
-            if (e.key === 'Escape') { 
-                if (menu.style.display === 'flex') toggleMenu(false); 
-                if (STATE.logModal?.style.display !== 'none') hideLogs(); 
-            } 
-        });
-        
-        window.addEventListener('resize', () => { 
-            const s = getResponsiveSize(); 
-            menu.style.width = s.menuWidth; 
-            [toggleInterceptBtn, clearDataBtn, diagnosticBtn, exportLogsBtn, refreshBtn].forEach(b => { 
-                if (b) {
-                    b.style.fontSize = s.fontSize; 
-                    b.style.padding = s.buttonPadding; 
-                }
-            }); 
-            title.style.fontSize = s.titleSize; 
-        });
+        function updateAll() {
+            updateStatusUI();
+            updateStatsUI();
+            updateProgressUI();
+        }
 
-        // Eventos dos botões
-        addTouchEvent(toggleInterceptBtn, () => {
+        function showProgress(current, total, message) {
+            STATE.progress.current = current;
+            STATE.progress.total = total;
+            STATE.progress.message = message;
+            STATE.progress.visible = true;
+            updateProgressUI();
+        }
+
+        function hideProgress() {
+            STATE.progress.visible = false;
+            updateProgressUI();
+        }
+
+        // ============ EVENTOS DOS BOTÕES ============
+        document.getElementById('hck-btn-intercept')?.addEventListener('click', () => {
             STATE.interceptEnabled = !STATE.interceptEnabled;
-            toggleInterceptBtn.textContent = STATE.interceptEnabled ? '⏸️ Desativar Interceptação' : '▶️ Ativar Interceptação';
-            updateStatusDisplay();
-            sendToast(`Interceptação ${STATE.interceptEnabled ? 'ativada' : 'desativada'}`, 3000);
-            addNotification('info', 'Interceptação', `Interceptação ${STATE.interceptEnabled ? 'ativada' : 'desativada'}`);
+            const btn = document.getElementById('hck-btn-intercept');
+            if (btn) btn.textContent = STATE.interceptEnabled ? '⏸️ Desativar Intercept' : '▶️ Ativar Intercept';
+            updateStatusUI();
+            sendToast(`Interceptação ${STATE.interceptEnabled ? 'ativada' : 'desativada'}`);
+            addNotification('info', 'Interceptação', `${STATE.interceptEnabled ? 'Ativada' : 'Desativada'}`);
         });
-        
-        addTouchEvent(clearDataBtn, () => {
-            if (confirm('Tem certeza que deseja limpar todos os dados?')) {
-                STATE.correctedTasks = [];
-                STATE.activityHistory = [];
-                STATE.notifications = [];
-                STATE.stats = {
-                    totalIntercepted: 0,
-                    totalCorrected: 0,
-                    totalFailed: 0,
-                    totalProcessed: 0,
-                    avgProcessingTime: 0,
-                    totalProcessingTime: 0,
-                    sessionStart: Date.now()
-                };
-                saveHistory();
-                updateStatsDisplay();
-                updateCorrectedTasksList();
-                updateNotificationsUI();
-                sendToast('Dados limpos com sucesso', 3000);
-                addNotification('success', 'Dados Limpos', 'Todos os dados foram limpos.');
-            }
-        });
-        
-        addTouchEvent(diagnosticBtn, async () => {
-            sendToast('Executando diagnóstico...', 2000);
-            const results = runDiagnostic();
-            let message = '🔍 Diagnóstico:\n';
-            message += `Token: ${results.token ? '✅' : '❌'}\n`;
-            message += `API: ${results.api ? '✅' : '❌'}\n`;
-            message += `Interceptação: ${results.intercept ? '✅' : '❌'}\n`;
-            message += `Dependências: ${results.dependencies ? '✅' : '❌'}\n`;
-            message += `UI: ${results.ui ? '✅' : '❌'}\n`;
-            if (results.errors.length > 0) {
-                message += `\n⚠️ Erros encontrados:\n${results.errors.map(e => `- ${e}`).join('\n')}`;
-            }
-            alert(message);
-            addNotification('info', 'Diagnóstico', `Diagnóstico concluído. ${results.errors.length > 0 ? `${results.errors.length} problemas encontrados.` : 'Tudo funcionando!'}`);
-        });
-        
-        addTouchEvent(exportLogsBtn, exportLogs);
-        
-        addTouchEvent(refreshBtn, async () => {
-            sendToast('Atualizando informações...', 2000);
-            updateProgress(0, 1, 'Atualizando atividade...');
-            await fetchCurrentActivity();
-            updateProgress(1, 1, 'Atualizado!');
+
+        document.getElementById('hck-btn-refresh')?.addEventListener('click', async () => {
+            sendToast('🔄 Atualizando...');
+            showProgress(0, 1, 'Buscando atividade...');
+            await fetchCurrentActivity().then(updateActivityUI);
+            showProgress(1, 1, 'Atualizado!');
             setTimeout(hideProgress, 500);
-            sendToast('Informações atualizadas!', 2000);
-            addNotification('info', 'Atualizado', 'Painel atualizado com sucesso.');
+            updateStatsUI();
+            sendToast('✅ Atualizado!');
         });
 
-        // Tabs
-        tabButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const tabName = btn.dataset.tab;
-                activeTab = tabName;
-                
-                tabButtons.forEach(b => {
-                    b.style.background = b === btn ? estilo.cores.accentBg : 'transparent';
-                    b.style.color = b === btn ? estilo.cores.accent : estilo.cores.textoSecundario;
-                });
-                
-                const panels = {
-                    '📊 Painel': activityPanel,
-                    '🤖 IA': chatPanel,
-                    '⚙️ Config': settingsPanel,
-                    '📈 Stats': statsPanel,
-                    '🔔 Notif': notificationsPanel
-                };
-                
-                Object.values(panels).forEach(p => {
-                    if (p) p.style.display = 'none';
-                });
-                
-                const target = panels[tabName];
-                if (target) {
-                    target.style.display = 'flex';
-                    if (tabName === '📈 Stats') updateStatsDisplay();
-                    if (tabName === '🔔 Notif') updateNotificationsUI();
-                }
-            });
+        document.getElementById('hck-btn-diagnostic')?.addEventListener('click', () => {
+            const result = runDiagnostic();
+            let msg = '🔍 DIAGNÓSTICO\n\n';
+            msg += `Token: ${result.token ? '✅' : '❌'}\n`;
+            msg += `API: ${result.api ? '✅' : '❌'}\n`;
+            msg += `Interceptação: ${result.intercept ? '✅' : '❌'}\n`;
+            msg += `Dependências: ${result.dependencies ? '✅' : '❌'}\n`;
+            msg += `UI: ${result.ui ? '✅' : '❌'}\n`;
+            if (result.errors.length) msg += `\n⚠️ ${result.errors.join('\n')}`;
+            alert(msg);
+            addNotification('info', 'Diagnóstico', result.errors.length ? `${result.errors.length} problemas encontrados` : 'Tudo funcionando!');
         });
 
-        // Chat IA
-        const chatInput = document.getElementById('chat-input');
-        const chatSend = document.getElementById('chat-send');
-        const chatMessages = document.getElementById('chat-messages');
-        
+        document.getElementById('hck-btn-export')?.addEventListener('click', exportLogs);
+
+        document.getElementById('hck-btn-clear')?.addEventListener('click', () => {
+            if (!confirm('Limpar todos os dados?')) return;
+            STATE.correctedTasks = [];
+            STATE.activityHistory = [];
+            STATE.notifications = [];
+            STATE.chatHistory = [];
+            STATE.stats = {
+                totalIntercepted: 0,
+                totalCorrected: 0,
+                totalFailed: 0,
+                totalProcessed: 0,
+                avgProcessingTime: 0,
+                totalProcessingTime: 0,
+                sessionStart: Date.now()
+            };
+            saveHistory();
+            updateStatsUI();
+            sendToast('🧹 Dados limpos!');
+            addNotification('info', 'Dados Limpos', 'Todos os dados foram removidos.');
+        });
+
+        // ============ CHAT IA ============
+        const chatInput = document.getElementById('hck-chat-input');
+        const chatSend = document.getElementById('hck-chat-send');
+        const chatMessages = document.getElementById('hck-chat-messages');
+
         async function sendChatMessage() {
-            if (!chatInput) return;
-            const question = chatInput.value.trim();
+            const question = chatInput?.value.trim();
             if (!question) return;
-            
-            chatInput.value = '';
-            chatMessages.innerHTML += `<div style="margin: 4px 0; text-align: right;"><span style="background: ${estilo.cores.accentBg}; color: ${estilo.cores.accent}; padding: 4px 8px; border-radius: 8px; display: inline-block; max-width: 80%;">${question}</span></div>`;
-            chatMessages.innerHTML += `<div style="margin: 4px 0; text-align: left; color: ${estilo.cores.textoSecundario};">🤖 Pensando...</div>`;
+            if (chatInput) chatInput.value = '';
+
+            chatMessages.innerHTML += `<div style="margin:4px 0;text-align:right;"><span style="background:${cores.accentBg};color:#fff;padding:4px 10px;border-radius:12px;display:inline-block;max-width:80%;">${question}</span></div>`;
+            chatMessages.innerHTML += `<div style="margin:4px 0;color:${cores.textoSec};">🤖 Pensando...</div>`;
             chatMessages.scrollTop = chatMessages.scrollHeight;
-            
+
             try {
-                const context = STATE.currentActivity ? 
-                    `Atividade: ${STATE.currentActivity.title}\nDisciplina: ${STATE.currentActivity.discipline}\nStatus: ${STATE.currentActivity.status}\nProgresso: ${STATE.currentActivity.progress}%\nQuestões: ${STATE.currentActivity.questionsCount}\nTipos: ${STATE.currentActivity.questionsTypes?.join(', ') || 'Não especificados'}` : 
-                    'Nenhuma atividade carregada';
-                
-                const response = await askAI(question, context);
-                
-                // Remover "Pensando..."
+                const response = await askAI(question);
                 chatMessages.removeChild(chatMessages.lastChild);
-                chatMessages.innerHTML += `<div style="margin: 4px 0; text-align: left; background: ${estilo.cores.fundo}; padding: 4px 8px; border-radius: 8px; display: inline-block; max-width: 85%; color: ${estilo.cores.texto}; white-space: pre-wrap;">🤖 ${response}</div>`;
+                chatMessages.innerHTML += `<div style="margin:4px 0;background:${cores.bgTer};padding:6px 10px;border-radius:12px;display:inline-block;max-width:85%;color:${cores.texto};white-space:pre-wrap;">🤖 ${response}</div>`;
             } catch (error) {
                 chatMessages.removeChild(chatMessages.lastChild);
-                chatMessages.innerHTML += `<div style="margin: 4px 0; text-align: left; color: ${estilo.cores.erro};">❌ Erro: ${error.message}</div>`;
+                chatMessages.innerHTML += `<div style="margin:4px 0;color:${cores.erro};">❌ ${error.message}</div>`;
             }
-            
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
-        
-        if (chatSend) chatSend.addEventListener('click', sendChatMessage);
-        if (chatInput) {
-            chatInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') sendChatMessage();
-            });
-        }
 
-        // Configurações
-        settingsList.forEach(setting => {
-            const checkbox = document.getElementById(`setting-${setting.id}`);
-            if (checkbox) {
-                checkbox.addEventListener('change', (e) => {
-                    STATE.settings[setting.id] = e.target.checked;
-                    saveSettings();
-                    sendToast(`Configuração "${setting.label}" ${e.target.checked ? 'ativada' : 'desativada'}`, 2000);
-                    addNotification('info', 'Configuração', `"${setting.label}" ${e.target.checked ? 'ativada' : 'desativada'}`);
-                    
-                    // Se desativar autoRefresh, parar o monitoramento
-                    if (setting.id === 'autoRefresh' && !e.target.checked) {
-                        // Parar monitoramento
-                    }
-                });
-                
-                // Atualizar estilo do toggle
-                const toggleSpan = checkbox.parentElement.querySelector('span:last-child');
-                if (toggleSpan) {
-                    checkbox.addEventListener('change', () => {
-                        const isChecked = checkbox.checked;
-                        const parentSpan = checkbox.parentElement.querySelector('span:first-child');
-                        if (parentSpan) {
-                            parentSpan.style.background = isChecked ? estilo.cores.accentBg : estilo.cores.fundoTerciario;
-                        }
-                        if (toggleSpan) {
-                            toggleSpan.style.transform = isChecked ? 'translateX(18px)' : 'none';
-                        }
-                    });
-                }
-            }
+        chatSend?.addEventListener('click', sendChatMessage);
+        chatInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChatMessage(); });
+
+        // ============ CONFIGURAÇÕES ============
+        document.getElementById('hck-set-notif')?.addEventListener('change', (e) => {
+            STATE.settings.notifications = e.target.checked;
+            saveSettings();
+        });
+        document.getElementById('hck-set-ai')?.addEventListener('change', (e) => {
+            STATE.settings.aiEnabled = e.target.checked;
+            saveSettings();
+            const section = document.getElementById('hck-chat-section');
+            if (section) section.style.display = e.target.checked ? 'block' : 'none';
+        });
+        document.getElementById('hck-set-autocorrect')?.addEventListener('change', (e) => {
+            STATE.settings.autoCorrect = e.target.checked;
+            saveSettings();
+        });
+        document.getElementById('hck-set-autopanel')?.addEventListener('change', (e) => {
+            STATE.settings.autoPanel = e.target.checked;
+            saveSettings();
         });
 
-        // Inicializar painéis
-        if (STATE.settings.autoPanel) {
-            setTimeout(() => {
-                fetchCurrentActivity();
-            }, 1000);
-        }
-        
-        // Iniciar monitoramento automático
-        if (STATE.settings.autoRefresh) {
-            setInterval(() => {
-                monitorAPI();
-                if (STATE.settings.autoPanel) {
-                    fetchCurrentActivity();
-                }
-            }, 30000);
-        }
+        // ============ NAVEGAÇÃO POR TABS ============
+        // Criar navegação por abas no cabeçalho
+        const nav = document.createElement('div');
+        nav.style.cssText = `
+            display: flex;
+            gap: 2px;
+            padding: 0 16px 8px 16px;
+            background: ${cores.bg};
+            border-bottom: 1px solid ${cores.borda};
+            flex-shrink: 0;
+        `;
 
-        return { 
-            helpers: { 
-                toggleMenu, 
-                showLogs: () => {}, 
-                hideLogs,
-                updateStatusDisplay,
-                updateStatsDisplay,
-                updateCorrectedTasksList,
-                updateActivityPanel,
-                updateNotificationsUI,
-                updateProgressUI,
-                fetchCurrentActivity,
-                askAI,
-                runDiagnostic,
-                exportLogs
-            } 
+        const tabs = [
+            { id: 'tab-main', label: '📊 Painel', sections: ['hck-activity-section', 'hck-progress-section', 'hck-status-section'] },
+            { id: 'tab-stats', label: '📈 Stats', sections: ['hck-stats-section'] },
+            { id: 'tab-chat', label: '🤖 IA', sections: ['hck-chat-section'] },
+            { id: 'tab-settings', label: '⚙️ Config', sections: ['hck-settings-section'] }
+        ];
+
+        // Mover seções para dentro do body e identificar
+        const sections = body.querySelectorAll('div[style*="background:"]');
+        sections.forEach(s => {
+            const title = s.querySelector('div:first-child')?.textContent || '';
+            if (title.includes('Status')) s.id = 'hck-status-section';
+            else if (title.includes('Atividade')) s.id = 'hck-activity-section';
+            else if (title.includes('Progresso')) s.id = 'hck-progress-section';
+            else if (title.includes('Estatísticas')) s.id = 'hck-stats-section';
+            else if (title.includes('Assistente')) s.id = 'hck-chat-section';
+            else if (title.includes('Configurações')) s.id = 'hck-settings-section';
+        });
+
+        let activeTab = 'tab-main';
+
+        tabs.forEach(tab => {
+            const btn = document.createElement('button');
+            btn.textContent = tab.label;
+            btn.dataset.tab = tab.id;
+            btn.style.cssText = `
+                padding: 4px 10px;
+                border: none;
+                border-radius: 6px;
+                background: ${tab.id === activeTab ? cores.accentBg : 'transparent'};
+                color: ${tab.id === activeTab ? '#fff' : cores.textoSec};
+                font-size: 11px;
+                font-weight: ${tab.id === activeTab ? '600' : '400'};
+                cursor: pointer;
+                transition: all 0.2s;
+            `;
+            btn.addEventListener('click', () => {
+                activeTab = tab.id;
+                // Atualizar botões
+                nav.querySelectorAll('button').forEach(b => {
+                    b.style.background = b.dataset.tab === activeTab ? cores.accentBg : 'transparent';
+                    b.style.color = b.dataset.tab === activeTab ? '#fff' : cores.textoSec;
+                    b.style.fontWeight = b.dataset.tab === activeTab ? '600' : '400';
+                });
+                // Mostrar/ocultar seções
+                const allSections = body.querySelectorAll('div[style*="background:"]');
+                allSections.forEach(s => {
+                    const shouldShow = tab.sections.includes(s.id);
+                    s.style.display = shouldShow ? 'block' : 'none';
+                });
+                // Mostrar ações sempre
+                const actionsSection = body.querySelector('div:last-child');
+                if (actionsSection) actionsSection.style.display = 'block';
+            });
+            nav.appendChild(btn);
+        });
+
+        // Inserir nav após o header
+        panel.insertBefore(nav, body);
+
+        // Mostrar apenas a aba inicial
+        const initialSections = tabs.find(t => t.id === activeTab)?.sections || [];
+        body.querySelectorAll('div[style*="background:"]').forEach(s => {
+            s.style.display = initialSections.includes(s.id) ? 'block' : 'none';
+        });
+
+        // ============ EXPOR API ============
+        window.__HCK = {
+            state: STATE,
+            fetchCurrentActivity,
+            askAI,
+            runDiagnostic,
+            exportLogs,
+            updateAll,
+            togglePanel,
+            showProgress,
+            hideProgress
         };
+
+        logMessage('INFO', 'Painel construído com sucesso.');
+        return { togglePanel, updateAll, updateActivityUI, showProgress, hideProgress };
     }
 
+    // ==================== INICIALIZAÇÃO ====================
+
     async function init() {
-        logMessage('INFO',`----- ${SCRIPT_NAME} Inicializando (v${SCRIPT_VERSION}) -----`);
-        
+        logMessage('INFO', `----- ${SCRIPT_NAME} v${SCRIPT_VERSION} Iniciando -----`);
+
         try {
-            // Carregar configurações e histórico
             loadSettings();
             loadHistory();
-            
-            // Carrega fontes primeiro (opcional, pode ser em paralelo)
+
             await loadCss('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-            // Carrega dependências do Toastify
             await loadCss('https://cdn.jsdelivr.net/npm/toastify-js/src/toastify.min.css');
             await loadScript('https://cdn.jsdelivr.net/npm/toastify-js');
             STATE.isToastifyLoaded = true;
-            injectToastStyles();
-            
-            const ui = setupUI();
-            if (!ui) throw new Error("Falha crítica na configuração da UI.");
-            logMessage('INFO','Configuração da UI completa.');
 
-            sendToast(`>> ${SCRIPT_NAME} Injetado! Aguardando login...`, 3000);
-            sendToast("Créditos: inacallep, miitch, crackingnlearn, hackermoon", 5000);
-            
-            addNotification('info', 'Script Iniciado', `${SCRIPT_NAME} v${SCRIPT_VERSION} carregado com sucesso.`);
+            const ui = buildUI();
+            if (!ui) throw new Error('Falha ao construir UI');
 
-            // Interceptador de fetch aprimorado
+            sendToast(`✅ ${SCRIPT_NAME} injetado!`, 3000);
+            addNotification('info', 'Script Iniciado', `${SCRIPT_NAME} v${SCRIPT_VERSION} carregado.`);
+
+            // Interceptador de fetch
             const originalFetch = window.fetch;
             window.fetch = async function(input, init) {
                 const url = typeof input === 'string' ? input : input.url;
-                const method = init ? init.method : 'GET';
+                const method = init?.method || 'GET';
 
+                // Capturar token
                 if (url === 'https://edusp-api.ip.tv/registration/edusp/token' && !STATE.capturedLoginData) {
                     try {
                         const response = await originalFetch.apply(this, arguments);
-                        const clonedResponse = response.clone();
-                        const data = await clonedResponse.json();
+                        const cloned = response.clone();
+                        const data = await cloned.json();
 
-                        if (data && data.auth_token) {
+                        if (data?.auth_token) {
                             STATE.capturedLoginData = data;
-                            logMessage('INFO', 'Token capturado com sucesso');
-                            
-                            if (STATE.isToastifyLoaded) {
-                                sendToast("✅ Entrada feita com sucesso!", 3000);
-                                addNotification('success', 'Login Detectado', 'Token capturado com sucesso.');
-
-                                const fullUserName = data?.name;
-                                let firstName = '';
-                                if (fullUserName && typeof fullUserName === 'string') {
-                                    const nameParts = fullUserName.trim().split(' ');
-                                    firstName = nameParts[0] || '';
-                                    if (firstName) {
-                                        firstName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
-                                    }
-                                }
-
-                                if (firstName) {
-                                    setTimeout(() => {
-                                        sendToast(`Seja bem-vindo(a), ${firstName}!`, 3500);
-                                    }, 250);
-                                }
-                            }
-                            
-                            // Atualiza a UI
-                            if (window.updateStatusDisplay) {
-                                window.updateStatusDisplay();
-                            }
-                            
-                            // Buscar atividade inicial
+                            logMessage('INFO', 'Token capturado');
+                            sendToast('✅ Login detectado!', 3000);
+                            addNotification('success', 'Login', 'Token capturado com sucesso.');
+                            ui.updateAll();
                             if (STATE.settings.autoPanel) {
-                                setTimeout(() => {
-                                    fetchCurrentActivity();
-                                }, 1000);
+                                const activity = await fetchCurrentActivity();
+                                ui.updateActivityUI(activity);
                             }
                         }
                         return response;
                     } catch (error) {
-                        console.error('[HCK TAREFAS] Erro CRÍTICO ao processar resposta do token:', error);
-                        if (STATE.isToastifyLoaded) {
-                            sendToast("Erro CRÍTICO ao capturar token. Ver console.", 5000);
-                            addNotification('error', 'Erro no Token', 'Falha ao capturar token de autenticação.');
-                        }
+                        logMessage('ERROR', 'Erro ao capturar token:', error);
                         return originalFetch.apply(this, arguments);
                     }
                 }
 
                 const response = await originalFetch.apply(this, arguments);
 
-                const answerSubmitRegex = /^https:\/\/edusp-api\.ip\.tv\/tms\/task\/\d+\/answer$/;
-                if (answerSubmitRegex.test(url) && init && init.method === 'POST' && STATE.interceptEnabled && STATE.settings.autoCorrect) {
-                    if (!STATE.capturedLoginData || !STATE.capturedLoginData.auth_token) {
-                        if (STATE.isToastifyLoaded) {
-                            sendToast("Ops! Token não encontrado. Envie novamente após login.", 4000);
-                            addNotification('warning', 'Token Ausente', 'Token não encontrado para correção automática.');
-                        }
+                // Interceptar envio de tarefa
+                const answerRegex = /^https:\/\/edusp-api\.ip\.tv\/tms\/task\/\d+\/answer$/;
+                if (answerRegex.test(url) && method === 'POST' && STATE.interceptEnabled && STATE.settings.autoCorrect) {
+                    if (!STATE.capturedLoginData?.auth_token) {
+                        sendToast('⚠️ Token não encontrado. Faça login primeiro.', 4000);
                         return response;
                     }
 
                     try {
-                        const clonedResponse = response.clone();
-                        const submittedData = await clonedResponse.json();
+                        const cloned = response.clone();
+                        const submittedData = await cloned.json();
                         STATE.stats.totalIntercepted++;
-                        
-                        if (window.updateStatsDisplay) {
-                            window.updateStatsDisplay();
-                        }
+                        ui.updateStatsUI();
+                        saveHistory();
 
-                        if (submittedData && submittedData.status !== "draft" && submittedData.id && submittedData.task_id) {
-                            sendToast("📤 Envio detectado! Iniciando correção...", 2000);
-                            addNotification('info', 'Correção Iniciada', `Tarefa ${submittedData.task_id} detectada. Corrigindo...`);
+                        if (submittedData?.id && submittedData?.task_id && submittedData.status !== 'draft') {
+                            sendToast('📤 Envio detectado! Corrigindo...', 2000);
+                            addNotification('info', 'Correção', `Tarefa ${submittedData.task_id} detectada.`);
                             
-                            updateProgress(0, 3, 'Buscando respostas corretas...');
+                            ui.showProgress(0, 3, 'Buscando respostas...');
 
-                            const headers_template = {
+                            const headers = {
                                 "x-api-realm": "edusp",
                                 "x-api-platform": "webclient",
                                 "x-api-key": STATE.capturedLoginData.auth_token,
@@ -1569,60 +1228,52 @@
 
                             setTimeout(async () => {
                                 try {
-                                    updateProgress(1, 3, 'Processando respostas...');
-                                    const startTime = Date.now();
-                                    const respostasOriginaisComGabarito = await pegarRespostasCorretas(submittedData.task_id, submittedData.id, headers_template);
+                                    ui.showProgress(1, 3, 'Processando...');
+                                    const gabarito = await pegarRespostasCorretas(submittedData.task_id, submittedData.id, headers);
                                     
-                                    updateProgress(2, 3, 'Enviando respostas corrigidas...');
-                                    await enviarRespostasCorrigidas(respostasOriginaisComGabarito, submittedData.task_id, submittedData.id, headers_template);
+                                    ui.showProgress(2, 3, 'Enviando correção...');
+                                    await enviarRespostasCorrigidas(gabarito, submittedData.task_id, submittedData.id, headers);
                                     
-                                    const processingTime = Date.now() - startTime;
-                                    STATE.stats.totalProcessingTime += processingTime;
-                                    STATE.stats.avgProcessingTime = Math.round(STATE.stats.totalProcessingTime / STATE.stats.totalProcessed);
-                                    saveHistory();
-                                    updateStatsDisplay();
+                                    ui.showProgress(3, 3, '✅ Concluído!');
+                                    setTimeout(ui.hideProgress, 1000);
+                                    ui.updateStatsUI();
                                     
-                                    updateProgress(3, 3, '✅ Concluído!');
-                                    setTimeout(hideProgress, 1000);
-                                    
-                                    addNotification('success', 'Correção Concluída', `Tarefa ${submittedData.task_id} corrigida em ${processingTime}ms.`);
-                                } catch (correctionError) {
-                                    logMessage('ERROR', 'Erro durante o processo de correção automática:', correctionError);
-                                    hideProgress();
-                                    addNotification('error', 'Erro na Correção', correctionError.message);
+                                } catch (err) {
+                                    logMessage('ERROR', 'Erro na correção:', err);
+                                    ui.hideProgress();
+                                    addNotification('error', 'Erro na Correção', err.message);
                                 }
                             }, 500);
                         }
                     } catch (err) {
-                        console.error('[HCK TAREFAS] Erro ao processar a resposta JSON do envio de tarefa POST:', err);
-                        if (STATE.isToastifyLoaded) {
-                            sendToast("Erro ao processar envio. Ver console.", 5000);
-                            addNotification('error', 'Erro no Processamento', err.message);
-                        }
+                        logMessage('ERROR', 'Erro ao processar envio:', err);
                     }
                 }
 
                 return response;
             };
 
-            logMessage('INFO',`----- ${SCRIPT_NAME} Inicializado (v${SCRIPT_VERSION}) -----`);
-            
-            // Mostrar menu automaticamente
-            setTimeout(() => {
-                if (ui && ui.helpers && ui.helpers.toggleMenu) {
-                    ui.helpers.toggleMenu(true);
+            // Abrir painel automaticamente
+            setTimeout(() => ui.togglePanel(true), 800);
+
+            // Monitoramento periódico
+            setInterval(async () => {
+                if (STATE.settings.autoPanel) {
+                    const activity = await fetchCurrentActivity();
+                    ui.updateActivityUI(activity);
                 }
-            }, 500);
+                ui.updateAll();
+            }, 30000);
+
+            logMessage('INFO', `----- ${SCRIPT_NAME} Inicializado -----`);
 
         } catch (error) {
-            logMessage('ERROR', '!!! ERRO CRÍTICO NA INICIALIZAÇÃO DO BOOKMARKLET !!!', error);
-            console.error(`[${SCRIPT_NAME} Init Fail]: ${error.message}. Script pode não funcionar. Verifique o Console.`);
-            sendToast(`Erro na inicialização: ${error.message}`, 5000);
-            addNotification('error', 'Erro de Inicialização', error.message);
+            logMessage('ERROR', 'Erro crítico na inicialização:', error);
+            console.error(error);
+            alert(`Erro ao iniciar ${SCRIPT_NAME}: ${error.message}`);
         }
     }
 
-    // Inicializa o bookmarklet
     await init();
 
 })();

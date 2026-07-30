@@ -3,7 +3,7 @@
  * Painel interativo para gerenciar tarefas com assistente IA
  * 
  * Uso: javascript:void(function(){var s=document.createElement('script');s.src='https://raw.githubusercontent.com/GabZs77/Ia-flutuante/main/terminal.js';document.head.appendChild(s);})()
- * Ou inline: javascript:void((function(){/* COLE O CÓDIGO AQUI */})())
+ * Ou inline: javascript:void((function(){"https://raw.githubusercontent.com/GabZs77/Ia-flutuante/main/terminal.js"})())
  */
 
 (function () {

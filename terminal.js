@@ -2,31 +2,36 @@
  * Terminal AI Painel - Sala do Futuro
  * Painel interativo para gerenciar tarefas com assistente IA
  * 
- * Uso: javascript:fetch("https://raw.githubusercontent.com/GabZs77/Ia-flutuante/main/terminal.js").then(r=>r.text()).then(eval);
+ * Uso: javascript:void(function(){var s=document.createElement('script');s.src='https://raw.githubusercontent.com/GabZs77/Ia-flutuante/main/terminal.js';document.head.appendChild(s);})()
+ * Ou inline: javascript:void((function(){/* COLE O CÓDIGO AQUI */})())
  */
 
 (function () {
   'use strict';
 
+  // Verificar se já existe uma instância
+  if (window.__terminalInstance) {
+    const existing = window.__terminalInstance;
+    if (existing.ui && existing.ui.root) {
+      existing.ui.root.style.display = existing.ui.root.style.display === 'none' ? '' : 'none';
+      return;
+    }
+  }
+
   // ── Config ──────────────────────────────────────────────────────────────────
   const CONFIG = {
-    // API IA
     AI_URL: 'https://gen.pollinations.ai/v1/chat/completions',
     AI_KEY: 'pk_bJav4nbMa2fZGkqG',
     AI_MODEL: 'openai',
-
-    // API Sala do Futuro
     LOGIN_URL: 'https://sedintegracoes.educacao.sp.gov.br/saladofuturobffapi/credenciais/api/LoginCompletoToken',
     OCP_KEY: 'd701a2043aa24d7ebb37e9adf60d043b',
     EDUSP_TOKEN_URL: 'https://edusp-api.ip.tv/registration/edusp/token',
-
-    // API Bypass CORS
     PROXY_URL: 'https://corsproxy.io/?',
     TURNSTILE_SECRET: '0x4AAAAAADf8FX1DAuHNy6M-3rohj2wvMvw'
   };
 
   // ── Estado global ──────────────────────────────────────────────────────────
-  let state = {
+  const state = {
     user: null,
     token: null,
     captcha: null,
@@ -39,1751 +44,1090 @@
     aiHistory: []
   };
 
-  // ── DOM refs ──────────────────────────────────────────────────────────────
-  let root, win, content, tabsContainer, tabContent;
-  let dashboardTab, tasksTab, assistantTab;
-  let terminalOutput, inputArea, inputLine, sendBtn;
-
   // ── Utility ──────────────────────────────────────────────────────────────
   const Utils = {
     escapeHtml(str) {
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+      const div = document.createElement('div');
+      div.textContent = String(str);
+      return div.innerHTML;
     },
-    formatTime(date = new Date()) {
+    formatTime(date) {
+      date = date || new Date();
       return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     },
     formatDate(date) {
+      if (!date) return '-';
       const d = new Date(date);
-      return d.toLocaleDateString('pt-BR');
+      return isNaN(d.getTime()) ? '-' : d.toLocaleDateString('pt-BR');
     },
     debounce(fn, ms) {
       let t;
-      return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+      return function() {
+        const args = arguments;
+        const ctx = this;
+        clearTimeout(t);
+        t = setTimeout(function() { fn.apply(ctx, args); }, ms);
+      };
     },
     uid() {
       return Math.random().toString(36).slice(2, 11);
     },
     sleep(ms) {
-      return new Promise(r => setTimeout(r, ms));
+      return new Promise(function(r) { setTimeout(r, ms); });
     }
   };
 
   // ── API Client ────────────────────────────────────────────────────────────
-  class APIClient {
-    // Login via Sala do Futuro
-    async login(ra, senha, turnstileToken) {
-      const body = { ra, senha, turnstile_token: turnstileToken };
+  function APIClient() {}
+
+  APIClient.prototype.login = async function(ra, senha, turnstileToken) {
+    var body = { ra: ra, senha: senha, turnstile_token: turnstileToken };
+    
+    try {
+      var response = await fetch(CONFIG.LOGIN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Ocp-Apim-Subscription-Key': CONFIG.OCP_KEY
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        var error = await response.json().catch(function() { return { message: 'Falha no login' }; });
+        throw new Error(error.message || 'Falha no login');
+      }
+
+      var data = await response.json();
+      console.log('[Terminal] Login response:', data);
+
+      var userData = {
+        nome: data.nome || data.userName || data.name || 'Usuário',
+        ra: data.ra || data.userId || ra,
+        token: data.token || data.accessToken || data.access_token,
+        email: data.email || data.userEmail || '',
+        escola: data.escola || data.schoolName || '',
+        turma: data.turma || data.className || ''
+      };
+
+      if (!userData.token) {
+        throw new Error('Token não encontrado na resposta');
+      }
+
+      return userData;
+    } catch (error) {
+      console.error('[Terminal] Login error:', error);
+      throw new Error(error.message || 'Erro ao fazer login');
+    }
+  };
+
+  APIClient.prototype.getEduspToken = async function(token, captcha) {
+    try {
+      var response = await fetch(CONFIG.EDUSP_TOKEN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token
+        },
+        body: JSON.stringify({ captcha: captcha })
+      });
+
+      if (!response.ok) {
+        throw new Error('Falha ao obter token EDUSP');
+      }
+
+      var data = await response.json();
+      return data.token || data.access_token || data;
+    } catch (error) {
+      console.error('[Terminal] EDUSP token error:', error);
+      throw error;
+    }
+  };
+
+  APIClient.prototype.getTasks = async function(token, captcha, cf) {
+    var cookies = document.cookie;
+    var targets = [];
+
+    try {
+      var roomsResp = await fetch('https://edusp-api.ip.tv/room/user', {
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'X-Captcha': captcha,
+          'Cookie': cookies
+        }
+      });
+
+      if (roomsResp.ok) {
+        var roomsData = await roomsResp.json();
+        var rooms = roomsData.rooms || [];
+        for (var i = 0; i < rooms.length; i++) {
+          var room = rooms[i];
+          if (room.name) targets.push(String(room.name));
+          var gcList = room.group_categories || [];
+          for (var j = 0; j < gcList.length; j++) {
+            if (gcList[j].id) targets.push(String(gcList[j].id));
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Terminal] Erro ao buscar targets:', e);
+    }
+
+    var self = this;
+    
+    async function fetchTasks(expired) {
+      var baseUrl = 'https://edusp-api.ip.tv/tms/task/todo?expired_only=' + String(expired).toLowerCase() + '&limit=100&offset=0&filter_expired=' + String(!expired).toLowerCase() + '&is_exam=false&with_answer=true&is_essay=false&answer_statuses=draft&answer_statuses=pending&with_apply_moment=true';
       
-      try {
-        const response = await fetch(CONFIG.LOGIN_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Ocp-Apim-Subscription-Key': CONFIG.OCP_KEY
-          },
-          body: JSON.stringify(body)
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Falha no login');
-        }
-
-        const data = await response.json();
-        console.log('Login response:', data);
-
-        // Extrair dados do usuário
-        const userData = {
-          nome: data.nome || data.userName || data.name || 'Usuário',
-          ra: data.ra || data.userId || data.ra || ra,
-          token: data.token || data.accessToken || data.access_token,
-          email: data.email || data.userEmail || '',
-          escola: data.escola || data.schoolName || '',
-          turma: data.turma || data.className || ''
-        };
-
-        if (!userData.token) {
-          throw new Error('Token não encontrado na resposta');
-        }
-
-        return userData;
-      } catch (error) {
-        console.error('Login error:', error);
-        throw new Error(error.message || 'Erro ao fazer login');
+      var url = baseUrl;
+      for (var k = 0; k < targets.length; k++) {
+        url += '&publication_target=' + encodeURIComponent(targets[k]);
       }
-    }
 
-    // Obter token EDUSP
-    async getEduspToken(token, captcha) {
       try {
-        const response = await fetch(CONFIG.EDUSP_TOKEN_URL, {
-          method: 'POST',
+        var resp = await fetch(url, {
           headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ captcha })
-        });
-
-        if (!response.ok) {
-          throw new Error('Falha ao obter token EDUSP');
-        }
-
-        const data = await response.json();
-        return data.token || data.access_token || data;
-      } catch (error) {
-        console.error('EDUSP token error:', error);
-        throw error;
-      }
-    }
-
-    // Buscar tarefas
-    async getTasks(token, captcha, cf = null) {
-      const cookies = document.cookie;
-      const targets = [];
-
-      // Buscar targets (salas)
-      try {
-        const roomsResp = await fetch('https://edusp-api.ip.tv/room/user', {
-          headers: {
-            'Authorization': `Bearer ${token}`,
+            'Authorization': 'Bearer ' + token,
             'X-Captcha': captcha,
             'Cookie': cookies
           }
         });
 
-        if (roomsResp.ok) {
-          const roomsData = await roomsResp.json();
-          for (const room of (roomsData.rooms || [])) {
-            if (room.name) targets.push(String(room.name));
-            for (const gc of (room.group_categories || [])) {
-              if (gc.id) targets.push(String(gc.id));
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Erro ao buscar targets:', e);
-      }
-
-      // Buscar tarefas pendentes e expiradas
-      const fetchTasks = async (expired) => {
-        const baseUrl = `https://edusp-api.ip.tv/tms/task/todo?expired_only=${String(expired).toLowerCase()}&limit=100&offset=0&filter_expired=${String(!expired).toLowerCase()}&is_exam=false&with_answer=true&is_essay=false&answer_statuses=draft&answer_statuses=pending&with_apply_moment=true`;
+        if (!resp.ok) return [];
+        var data = await resp.json();
         
-        let url = baseUrl;
-        for (const t of targets) {
-          url += `&publication_target=${t}`;
-        }
+        if (Array.isArray(data)) return data;
+        return data.results || data.tasks || [];
+      } catch (e) {
+        console.warn('[Terminal] Erro ao buscar tarefas:', e);
+        return [];
+      }
+    }
 
-        try {
-          const resp = await fetch(url, {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'X-Captcha': captcha,
-              'Cookie': cookies
-            }
-          });
-
-          if (!resp.ok) return [];
-          const data = await resp.json();
-          
-          if (Array.isArray(data)) return data;
-          return data.results || data.tasks || [];
-        } catch (e) {
-          console.warn('Erro ao buscar tarefas:', e);
-          return [];
-        }
-      };
-
-      const pending = await fetchTasks(false);
-      const expired = await fetchTasks(true);
-
-      const formatTasks = (tasks, tipo) => {
-        return tasks.map(t => ({
+    function formatTasks(tasks, tipo) {
+      return tasks.map(function(t) {
+        return {
           id: t.id,
-          title: t.title || `#${t.id}`,
-          expire_at: t.expire_at ? Utils.formatDate(t.expire_at) : '-',
+          title: t.title || '#' + t.id,
+          expire_at: Utils.formatDate(t.expire_at),
           publication_target: t.publication_target || '',
           tipo: tipo,
           description: t.description || '',
           questions: t.questions || []
-        }));
-      };
-
-      return {
-        pending: formatTasks(pending, 'pendente'),
-        expired: formatTasks(expired, 'expirada'),
-        captcha
-      };
+        };
+      });
     }
 
-    // Completar tarefa
-    async completeTask(token, captcha, taskId, publicationTarget, waitSec = 90, cf = null, draft = false) {
-      const cookies = document.cookie;
+    var pending = await fetchTasks(false);
+    var expired = await fetchTasks(true);
+
+    return {
+      pending: formatTasks(pending, 'pendente'),
+      expired: formatTasks(expired, 'expirada'),
+      captcha: captcha
+    };
+  };
+
+  APIClient.prototype.completeTask = async function(token, captcha, taskId, publicationTarget, waitSec, cf, draft) {
+    var cookies = document.cookie;
+    waitSec = waitSec || 90;
+    draft = draft || false;
+    
+    try {
+      var applyUrl = 'https://edusp-api.ip.tv/tms/task/' + taskId + '/apply/?preview_mode=false&room_code=' + encodeURIComponent(publicationTarget);
+      var applyResp = await fetch(applyUrl, {
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'X-Captcha': captcha,
+          'Cookie': cookies
+        }
+      });
+
+      if (!applyResp.ok) {
+        var error = await applyResp.json().catch(function() { return { message: 'Falha ao aplicar tarefa' }; });
+        throw new Error('Falha ao aplicar tarefa: ' + (error.message || applyResp.status));
+      }
+
+      var lesson = await applyResp.json();
+      var wait = Math.max(lesson.min_execution_time || 60, waitSec);
       
-      try {
-        // Aplicar tarefa
-        const applyUrl = `https://edusp-api.ip.tv/tms/task/${taskId}/apply/?preview_mode=false&room_code=${publicationTarget}`;
-        const applyResp = await fetch(applyUrl, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'X-Captcha': captcha,
-            'Cookie': cookies
+      // Mostrar progresso
+      if (window.__terminalInstance && window.__terminalInstance.ui) {
+        var ui = window.__terminalInstance.ui;
+        for (var i = 0; i < wait; i++) {
+          await Utils.sleep(1000);
+          if (i % 10 === 0) {
+            ui._appendToTasks('⏳ Aguardando... ' + (wait - i) + 's restantes', 'dim');
           }
-        });
-
-        if (!applyResp.ok) {
-          const error = await applyResp.json();
-          throw new Error(`Falha ao aplicar tarefa: ${error.message || applyResp.status}`);
         }
-
-        const lesson = await applyResp.json();
-        const wait = Math.max(lesson.min_execution_time || 60, waitSec);
-        
-        // Aguardar tempo mínimo
+      } else {
         await Utils.sleep(wait * 1000);
-
-        // Completar tarefa
-        const completeResp = await fetch('https://corsproxy.io/?https://edusp-api.ip.tv/api/complete', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': '*/*',
-            'Accept-Language': 'pt-BR,pt;q=0.7',
-            'Origin': 'https://edusp-api.ip.tv',
-            'Referer': 'https://edusp-api.ip.tv/',
-            'User-Agent': navigator.userAgent
-          },
-          body: JSON.stringify({
-            x_auth_key: token,
-            room_code: publicationTarget,
-            lesson_id: taskId,
-            draft: draft,
-            lesson_info: lesson,
-            time_spent: wait,
-            answer_id: lesson.answer_id || 0,
-            target_score: 100,
-            captchaToken: captcha
-          })
-        });
-
-        if (!completeResp.ok) {
-          const error = await completeResp.json();
-          throw new Error(`Falha ao completar tarefa: ${error.message || error.error || completeResp.status}`);
-        }
-
-        const result = await completeResp.json();
-        return { success: true, wait, draft };
-      } catch (error) {
-        console.error('Complete task error:', error);
-        throw error;
       }
-    }
 
-    // Buscar respostas da tarefa
-    async getTaskAnswers(token, taskId, publicationTarget) {
-      try {
-        const url = `https://edusp-api.ip.tv/tms/task/${taskId}/answers?room_code=${publicationTarget}`;
-        const response = await fetch(url, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Cookie': document.cookie
-          }
-        });
+      var completeResp = await fetch(CONFIG.PROXY_URL + 'https://edusp-api.ip.tv/api/complete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': '*/*',
+          'Accept-Language': 'pt-BR,pt;q=0.7',
+          'Origin': 'https://edusp-api.ip.tv',
+          'Referer': 'https://edusp-api.ip.tv/',
+          'User-Agent': navigator.userAgent
+        },
+        body: JSON.stringify({
+          x_auth_key: token,
+          room_code: publicationTarget,
+          lesson_id: taskId,
+          draft: draft,
+          lesson_info: lesson,
+          time_spent: wait,
+          answer_id: lesson.answer_id || 0,
+          target_score: 100,
+          captchaToken: captcha
+        })
+      });
 
-        if (!response.ok) {
-          throw new Error('Falha ao buscar respostas');
-        }
-
-        const data = await response.json();
-        return data.answers || data.results || data;
-      } catch (error) {
-        console.error('Get answers error:', error);
-        return null;
+      if (!completeResp.ok) {
+        var err2 = await completeResp.json().catch(function() { return { message: 'Falha ao completar' }; });
+        throw new Error('Falha ao completar tarefa: ' + (err2.message || err2.error || completeResp.status));
       }
+
+      var result = await completeResp.json();
+      return { success: true, wait: wait, draft: draft };
+    } catch (error) {
+      console.error('[Terminal] Complete task error:', error);
+      throw error;
     }
+  };
 
-    // Chat com IA
-    async chat(messages, onChunk) {
-      try {
-        const response = await fetch(CONFIG.AI_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${CONFIG.AI_KEY}`
-          },
-          body: JSON.stringify({
-            model: CONFIG.AI_MODEL,
-            messages: messages,
-            stream: true
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error(`Erro na API: ${response.status}`);
+  APIClient.prototype.getTaskAnswers = async function(token, taskId, publicationTarget) {
+    try {
+      var url = 'https://edusp-api.ip.tv/tms/task/' + taskId + '/answers?room_code=' + encodeURIComponent(publicationTarget);
+      var response = await fetch(url, {
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Cookie': document.cookie
         }
+      });
 
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
+      if (!response.ok) {
+        throw new Error('Falha ao buscar respostas');
+      }
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+      var data = await response.json();
+      return data.answers || data.results || data;
+    } catch (error) {
+      console.error('[Terminal] Get answers error:', error);
+      return null;
+    }
+  };
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+  APIClient.prototype.chat = async function(messages, onChunk) {
+    try {
+      var response = await fetch(CONFIG.AI_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + CONFIG.AI_KEY
+        },
+        body: JSON.stringify({
+          model: CONFIG.AI_MODEL,
+          messages: messages,
+          stream: true
+        })
+      });
 
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            
-            try {
-              const chunk = JSON.parse(data);
-              const content = chunk.choices?.[0]?.delta?.content;
-              if (content) onChunk(content);
-            } catch (e) {
-              // Ignorar chunks malformados
-            }
+      if (!response.ok) {
+        throw new Error('Erro na API: ' + response.status);
+      }
+
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = '';
+
+      while (true) {
+        var result = await reader.read();
+        if (result.done) break;
+
+        buffer += decoder.decode(result.value, { stream: true });
+        var lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (line.indexOf('data: ') !== 0) continue;
+          var data = line.slice(6);
+          if (data === '[DONE]') continue;
+          
+          try {
+            var chunk = JSON.parse(data);
+            var content = chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
+            if (content) onChunk(content);
+          } catch (e) {
+            // Ignorar chunks malformados
           }
         }
-      } catch (error) {
-        console.error('Chat error:', error);
-        throw error;
       }
-    }
-
-    // Verificar Turnstile
-    async verifyTurnstile(token) {
-      if (!token) return false;
-      try {
-        const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            secret: CONFIG.TURNSTILE_SECRET,
-            response: token
-          })
-        });
-        const result = await response.json();
-        return result.success || false;
-      } catch (e) {
-        console.error('Turnstile verification error:', e);
-        return false;
-      }
-    }
-  }
-
-  const api = new APIClient();
-
-  // ── Interface do Terminal ──────────────────────────────────────────────────
-  const terminalStyles = `
-    #terminal-root {
-      --term-bg: #0a0a0a;
-      --term-surface: #111111;
-      --term-surface2: #1a1a1a;
-      --term-border: #2a2a2a;
-      --term-text: #e0e0e0;
-      --term-text2: #888888;
-      --term-accent: #00d4ff;
-      --term-accent2: #00ff88;
-      --term-success: #00ff88;
-      --term-warning: #ffd700;
-      --term-error: #ff4444;
-      --term-purple: #b388ff;
-      position: fixed;
-      inset: 0;
-      z-index: 2147483647;
-      background: var(--term-bg);
-      color: var(--term-text);
-      font-family: 'Courier New', 'Fira Code', monospace;
-      font-size: 13px;
-      display: flex;
-      flex-direction: column;
-      pointer-events: all;
-      animation: terminalFadeIn 0.3s ease;
-    }
-
-    @keyframes terminalFadeIn {
-      from { opacity: 0; transform: scale(0.98); }
-      to { opacity: 1; transform: scale(1); }
-    }
-
-    #terminal-root * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    /* Header */
-    .term-header {
-      display: flex;
-      align-items: center;
-      padding: 8px 16px;
-      background: var(--term-surface);
-      border-bottom: 1px solid var(--term-border);
-      flex-shrink: 0;
-      min-height: 44px;
-      user-select: none;
-    }
-
-    .term-header-left {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      flex: 1;
-    }
-
-    .term-dots {
-      display: flex;
-      gap: 6px;
-    }
-
-    .term-dot {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      cursor: pointer;
-      transition: opacity 0.2s;
-    }
-
-    .term-dot:hover { opacity: 0.7; }
-    .term-dot-red { background: #ff5f56; }
-    .term-dot-yellow { background: #ffbd2e; }
-    .term-dot-green { background: #27c93f; }
-
-    .term-title {
-      color: var(--term-text2);
-      font-size: 12px;
-      letter-spacing: 0.5px;
-      margin-left: 8px;
-    }
-
-    .term-header-actions {
-      display: flex;
-      gap: 6px;
-    }
-
-    .term-hbtn {
-      background: transparent;
-      border: 1px solid var(--term-border);
-      color: var(--term-text2);
-      padding: 4px 12px;
-      border-radius: 4px;
-      font-size: 11px;
-      cursor: pointer;
-      transition: all 0.2s;
-      font-family: inherit;
-    }
-
-    .term-hbtn:hover {
-      background: var(--term-surface2);
-      color: var(--term-text);
-      border-color: var(--term-text2);
-    }
-
-    /* Tabs */
-    .term-tabs {
-      display: flex;
-      background: var(--term-surface);
-      border-bottom: 1px solid var(--term-border);
-      flex-shrink: 0;
-      overflow-x: auto;
-      padding: 0 8px;
-    }
-
-    .term-tab {
-      padding: 8px 16px;
-      color: var(--term-text2);
-      cursor: pointer;
-      font-size: 12px;
-      border-bottom: 2px solid transparent;
-      transition: all 0.2s;
-      white-space: nowrap;
-      background: transparent;
-      border-top: none;
-      border-left: none;
-      border-right: none;
-      font-family: inherit;
-    }
-
-    .term-tab:hover {
-      color: var(--term-text);
-      background: var(--term-surface2);
-    }
-
-    .term-tab.active {
-      color: var(--term-accent);
-      border-bottom-color: var(--term-accent);
-    }
-
-    .term-tab-badge {
-      display: inline-block;
-      background: var(--term-accent);
-      color: #000;
-      font-size: 10px;
-      padding: 0 6px;
-      border-radius: 10px;
-      margin-left: 4px;
-      font-weight: bold;
-    }
-
-    /* Content */
-    .term-content {
-      flex: 1;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      background: var(--term-bg);
-    }
-
-    .term-tab-content {
-      display: none;
-      flex: 1;
-      overflow-y: auto;
-      padding: 12px 16px;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .term-tab-content.active {
-      display: flex;
-    }
-
-    .term-tab-content::-webkit-scrollbar {
-      width: 6px;
-    }
-
-    .term-tab-content::-webkit-scrollbar-track {
-      background: transparent;
-    }
-
-    .term-tab-content::-webkit-scrollbar-thumb {
-      background: var(--term-border);
-      border-radius: 3px;
-    }
-
-    /* Terminal output */
-    .term-output {
-      font-family: 'Courier New', monospace;
-      font-size: 13px;
-      line-height: 1.6;
-      padding: 8px 4px;
-      flex: 1;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-    }
-
-    .term-output .line {
-      margin: 2px 0;
-    }
-
-    .term-output .prompt {
-      color: var(--term-accent2);
-    }
-
-    .term-output .info {
-      color: var(--term-accent);
-    }
-
-    .term-output .warn {
-      color: var(--term-warning);
-    }
-
-    .term-output .error {
-      color: var(--term-error);
-    }
-
-    .term-output .success {
-      color: var(--term-success);
-    }
-
-    .term-output .dim {
-      color: var(--term-text2);
-    }
-
-    .term-output .highlight {
-      color: var(--term-purple);
-      font-weight: bold;
-    }
-
-    .term-output .cursor {
-      animation: blink 1s step-end infinite;
-    }
-
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0; }
-    }
-
-    /* Status bar */
-    .term-status {
-      padding: 4px 16px;
-      background: var(--term-surface);
-      border-top: 1px solid var(--term-border);
-      font-size: 11px;
-      color: var(--term-text2);
-      flex-shrink: 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      min-height: 28px;
-    }
-
-    .term-status .status-dot {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      margin-right: 6px;
-    }
-
-    .term-status .status-dot.online { background: var(--term-success); }
-    .term-status .status-dot.busy { background: var(--term-warning); animation: pulse 1s ease-in-out infinite; }
-    .term-status .status-dot.offline { background: var(--term-error); }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
-    }
-
-    /* Task cards */
-    .task-card {
-      background: var(--term-surface);
-      border: 1px solid var(--term-border);
-      border-radius: 6px;
-      padding: 12px 16px;
-      margin-bottom: 8px;
-      transition: all 0.2s;
-    }
-
-    .task-card:hover {
-      border-color: var(--term-text2);
-      background: var(--term-surface2);
-    }
-
-    .task-card .task-title {
-      color: var(--term-text);
-      font-weight: bold;
-      font-size: 14px;
-    }
-
-    .task-card .task-meta {
-      color: var(--term-text2);
-      font-size: 12px;
-      margin: 4px 0 8px 0;
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-
-    .task-card .task-meta span {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .task-card .task-status {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: bold;
-    }
-
-    .task-card .task-status.pending {
-      background: #1a3a2a;
-      color: var(--term-success);
-    }
-
-    .task-card .task-status.expired {
-      background: #3a1a1a;
-      color: var(--term-error);
-    }
-
-    .task-card .task-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-      flex-wrap: wrap;
-    }
-
-    .task-card .task-actions button {
-      padding: 4px 14px;
-      background: transparent;
-      border: 1px solid var(--term-border);
-      color: var(--term-text2);
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      transition: all 0.2s;
-      font-family: inherit;
-    }
-
-    .task-card .task-actions button:hover {
-      background: var(--term-surface2);
-      color: var(--term-text);
-      border-color: var(--term-text2);
-    }
-
-    .task-card .task-actions button.primary {
-      border-color: var(--term-accent);
-      color: var(--term-accent);
-    }
-
-    .task-card .task-actions button.primary:hover {
-      background: var(--term-accent);
-      color: #000;
-    }
-
-    .task-card .task-actions button.danger {
-      border-color: var(--term-error);
-      color: var(--term-error);
-    }
-
-    .task-card .task-actions button.danger:hover {
-      background: var(--term-error);
-      color: #000;
-    }
-
-    /* Loading spinner */
-    .term-spinner {
-      display: inline-block;
-      width: 16px;
-      height: 16px;
-      border: 2px solid var(--term-border);
-      border-top-color: var(--term-accent);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    /* Input area */
-    .term-input-area {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      background: var(--term-surface);
-      border-top: 1px solid var(--term-border);
-      flex-shrink: 0;
-    }
-
-    .term-input-area .prompt-symbol {
-      color: var(--term-accent2);
-      font-weight: bold;
-      font-size: 14px;
-    }
-
-    .term-input-area input {
-      flex: 1;
-      background: var(--term-bg);
-      border: 1px solid var(--term-border);
-      color: var(--term-text);
-      padding: 6px 12px;
-      border-radius: 4px;
-      font-family: 'Courier New', monospace;
-      font-size: 13px;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
-    .term-input-area input:focus {
-      border-color: var(--term-accent);
-    }
-
-    .term-input-area input::placeholder {
-      color: var(--term-text2);
-    }
-
-    .term-input-area button {
-      padding: 6px 16px;
-      background: var(--term-accent);
-      color: #000;
-      border: none;
-      border-radius: 4px;
-      font-weight: bold;
-      cursor: pointer;
-      font-size: 12px;
-      transition: all 0.2s;
-      font-family: inherit;
-    }
-
-    .term-input-area button:hover {
-      opacity: 0.8;
-      transform: scale(1.02);
-    }
-
-    .term-input-area button:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-      transform: none;
-    }
-
-    /* AI Chat messages */
-    .ai-message {
-      padding: 8px 12px;
-      border-radius: 6px;
-      margin: 4px 0;
-      max-width: 90%;
-      word-wrap: break-word;
-    }
-
-    .ai-message.user {
-      background: var(--term-surface);
-      border-left: 3px solid var(--term-accent);
-      align-self: flex-end;
-    }
-
-    .ai-message.assistant {
-      background: var(--term-surface2);
-      border-left: 3px solid var(--term-purple);
-      align-self: flex-start;
-    }
-
-    .ai-message .msg-role {
-      font-size: 10px;
-      color: var(--term-text2);
-      margin-bottom: 2px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .ai-message .msg-content {
-      white-space: pre-wrap;
-      line-height: 1.6;
-    }
-
-    .ai-message .msg-content code {
-      background: var(--term-bg);
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-size: 12px;
-    }
-
-    .ai-chat-container {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      overflow: hidden;
-    }
-
-    .ai-messages-area {
-      flex: 1;
-      overflow-y: auto;
-      padding: 4px 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .ai-messages-area::-webkit-scrollbar {
-      width: 4px;
-    }
-
-    .ai-messages-area::-webkit-scrollbar-thumb {
-      background: var(--term-border);
-      border-radius: 2px;
-    }
-
-    .ai-messages-area .typing-indicator {
-      color: var(--term-text2);
-      font-size: 12px;
-      padding: 4px 8px;
-    }
-
-    .ai-messages-area .typing-indicator .dot {
-      display: inline-block;
-      animation: typingDot 1.4s infinite;
-    }
-
-    .ai-messages-area .typing-indicator .dot:nth-child(2) { animation-delay: 0.2s; }
-    .ai-messages-area .typing-indicator .dot:nth-child(3) { animation-delay: 0.4s; }
-
-    @keyframes typingDot {
-      0%, 60%, 100% { opacity: 0.3; }
-      30% { opacity: 1; }
-    }
-
-    /* Animações de entrada */
-    .fade-in {
-      animation: fadeIn 0.3s ease;
-    }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    .slide-in {
-      animation: slideIn 0.3s ease;
-    }
-
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateX(-8px); }
-      to { opacity: 1; transform: translateX(0); }
-    }
-
-    /* Responsivo */
-    @media (max-width: 768px) {
-      #terminal-root {
-        font-size: 12px;
-      }
-      .term-tab {
-        padding: 6px 12px;
-        font-size: 11px;
-      }
-      .term-header {
-        padding: 4px 12px;
-        min-height: 36px;
-      }
-      .term-tab-content {
-        padding: 8px 12px;
-      }
-      .task-card .task-meta {
-        flex-direction: column;
-        gap: 4px;
-      }
-    }
-
-    /* Scrollbar global */
-    #terminal-root ::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
-    }
-
-    #terminal-root ::-webkit-scrollbar-track {
-      background: transparent;
-    }
-
-    #terminal-root ::-webkit-scrollbar-thumb {
-      background: var(--term-border);
-      border-radius: 3px;
-    }
-
-    #terminal-root ::-webkit-scrollbar-thumb:hover {
-      background: var(--term-text2);
-    }
-  `;
+    } catch (error) {
+      console.error('[Terminal] Chat error:', error);
+      throw error;
+    }
+  };
+
+  APIClient.prototype.verifyTurnstile = async function(token) {
+    if (!token) return false;
+    try {
+      var response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          secret: CONFIG.TURNSTILE_SECRET,
+          response: token
+        })
+      });
+      var result = await response.json();
+      return result.success || false;
+    } catch (e) {
+      console.error('[Terminal] Turnstile verification error:', e);
+      return false;
+    }
+  };
+
+  var api = new APIClient();
+
+  // ── Estilos do Terminal ──────────────────────────────────────────────────
+  var terminalStyles = '#terminal-root{--term-bg:#0a0a0a;--term-surface:#111111;--term-surface2:#1a1a1a;--term-border:#2a2a2a;--term-text:#e0e0e0;--term-text2:#888888;--term-accent:#00d4ff;--term-accent2:#00ff88;--term-success:#00ff88;--term-warning:#ffd700;--term-error:#ff4444;--term-purple:#b388ff;position:fixed;inset:0;z-index:2147483647;background:var(--term-bg);color:var(--term-text);font-family:"Courier New","Fira Code",monospace;font-size:13px;display:flex;flex-direction:column;pointer-events:all;animation:terminalFadeIn 0.3s ease}@keyframes terminalFadeIn{from{opacity:0;transform:scale(0.98)}to{opacity:1;transform:scale(1)}}#terminal-root *{box-sizing:border-box;margin:0;padding:0}.term-header{display:flex;align-items:center;padding:8px 16px;background:var(--term-surface);border-bottom:1px solid var(--term-border);flex-shrink:0;min-height:44px;user-select:none}.term-header-left{display:flex;align-items:center;gap:12px;flex:1}.term-dots{display:flex;gap:6px}.term-dot{width:12px;height:12px;border-radius:50%;cursor:pointer;transition:opacity 0.2s}.term-dot:hover{opacity:0.7}.term-dot-red{background:#ff5f56}.term-dot-yellow{background:#ffbd2e}.term-dot-green{background:#27c93f}.term-title{color:var(--term-text2);font-size:12px;letter-spacing:0.5px;margin-left:8px}.term-header-actions{display:flex;gap:6px}.term-hbtn{background:transparent;border:1px solid var(--term-border);color:var(--term-text2);padding:4px 12px;border-radius:4px;font-size:11px;cursor:pointer;transition:all 0.2s;font-family:inherit}.term-hbtn:hover{background:var(--term-surface2);color:var(--term-text);border-color:var(--term-text2)}.term-tabs{display:flex;background:var(--term-surface);border-bottom:1px solid var(--term-border);flex-shrink:0;overflow-x:auto;padding:0 8px}.term-tab{padding:8px 16px;color:var(--term-text2);cursor:pointer;font-size:12px;border-bottom:2px solid transparent;transition:all 0.2s;white-space:nowrap;background:transparent;border-top:none;border-left:none;border-right:none;font-family:inherit}.term-tab:hover{color:var(--term-text);background:var(--term-surface2)}.term-tab.active{color:var(--term-accent);border-bottom-color:var(--term-accent)}.term-tab-badge{display:inline-block;background:var(--term-accent);color:#000;font-size:10px;padding:0 6px;border-radius:10px;margin-left:4px;font-weight:bold}.term-content{flex:1;overflow:hidden;display:flex;flex-direction:column;background:var(--term-bg)}.term-tab-content{display:none;flex:1;overflow-y:auto;padding:12px 16px;flex-direction:column;gap:8px}.term-tab-content.active{display:flex}.term-tab-content::-webkit-scrollbar{width:6px}.term-tab-content::-webkit-scrollbar-track{background:transparent}.term-tab-content::-webkit-scrollbar-thumb{background:var(--term-border);border-radius:3px}.term-output{font-family:"Courier New",monospace;font-size:13px;line-height:1.6;padding:8px 4px;flex:1;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word}.term-output .line{margin:2px 0}.term-output .prompt{color:var(--term-accent2)}.term-output .info{color:var(--term-accent)}.term-output .warn{color:var(--term-warning)}.term-output .error{color:var(--term-error)}.term-output .success{color:var(--term-success)}.term-output .dim{color:var(--term-text2)}.term-output .highlight{color:var(--term-purple);font-weight:bold}.term-status{padding:4px 16px;background:var(--term-surface);border-top:1px solid var(--term-border);font-size:11px;color:var(--term-text2);flex-shrink:0;display:flex;justify-content:space-between;align-items:center;min-height:28px}.term-status .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.term-status .status-dot.online{background:var(--term-success)}.term-status .status-dot.busy{background:var(--term-warning);animation:pulse 1s ease-in-out infinite}.term-status .status-dot.offline{background:var(--term-error)}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}.task-card{background:var(--term-surface);border:1px solid var(--term-border);border-radius:6px;padding:12px 16px;margin-bottom:8px;transition:all 0.2s}.task-card:hover{border-color:var(--term-text2);background:var(--term-surface2)}.task-card .task-title{color:var(--term-text);font-weight:bold;font-size:14px}.task-card .task-meta{color:var(--term-text2);font-size:12px;margin:4px 0 8px 0;display:flex;gap:16px;flex-wrap:wrap}.task-card .task-meta span{display:flex;align-items:center;gap:4px}.task-card .task-status{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:bold}.task-card .task-status.pending{background:#1a3a2a;color:var(--term-success)}.task-card .task-status.expired{background:#3a1a1a;color:var(--term-error)}.task-card .task-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}.task-card .task-actions button{padding:4px 14px;background:transparent;border:1px solid var(--term-border);color:var(--term-text2);border-radius:4px;cursor:pointer;font-size:12px;transition:all 0.2s;font-family:inherit}.task-card .task-actions button:hover{background:var(--term-surface2);color:var(--term-text);border-color:var(--term-text2)}.task-card .task-actions button.primary{border-color:var(--term-accent);color:var(--term-accent)}.task-card .task-actions button.primary:hover{background:var(--term-accent);color:#000}.term-spinner{display:inline-block;width:16px;height:16px;border:2px solid var(--term-border);border-top-color:var(--term-accent);border-radius:50%;animation:spin 0.8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.term-input-area{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--term-surface);border-top:1px solid var(--term-border);flex-shrink:0}.term-input-area .prompt-symbol{color:var(--term-accent2);font-weight:bold;font-size:14px}.term-input-area input{flex:1;background:var(--term-bg);border:1px solid var(--term-border);color:var(--term-text);padding:6px 12px;border-radius:4px;font-family:"Courier New",monospace;font-size:13px;outline:none;transition:border-color 0.2s}.term-input-area input:focus{border-color:var(--term-accent)}.term-input-area input::placeholder{color:var(--term-text2)}.term-input-area button{padding:6px 16px;background:var(--term-accent);color:#000;border:none;border-radius:4px;font-weight:bold;cursor:pointer;font-size:12px;transition:all 0.2s;font-family:inherit}.term-input-area button:hover{opacity:0.8;transform:scale(1.02)}.term-input-area button:disabled{opacity:0.4;cursor:not-allowed;transform:none}.ai-message{padding:8px 12px;border-radius:6px;margin:4px 0;max-width:90%;word-wrap:break-word}.ai-message.user{background:var(--term-surface);border-left:3px solid var(--term-accent);align-self:flex-end}.ai-message.assistant{background:var(--term-surface2);border-left:3px solid var(--term-purple);align-self:flex-start}.ai-message .msg-role{font-size:10px;color:var(--term-text2);margin-bottom:2px;text-transform:uppercase;letter-spacing:0.5px}.ai-message .msg-content{white-space:pre-wrap;line-height:1.6}.ai-chat-container{display:flex;flex-direction:column;flex:1;overflow:hidden}.ai-messages-area{flex:1;overflow-y:auto;padding:4px 8px;display:flex;flex-direction:column;gap:4px}.ai-messages-area::-webkit-scrollbar{width:4px}.ai-messages-area::-webkit-scrollbar-thumb{background:var(--term-border);border-radius:2px}.ai-messages-area .typing-indicator{color:var(--term-text2);font-size:12px;padding:4px 8px}.ai-messages-area .typing-indicator .dot{display:inline-block;animation:typingDot 1.4s infinite}.ai-messages-area .typing-indicator .dot:nth-child(2){animation-delay:0.2s}.ai-messages-area .typing-indicator .dot:nth-child(3){animation-delay:0.4s}@keyframes typingDot{0%,60%,100%{opacity:0.3}30%{opacity:1}}.fade-in{animation:fadeIn 0.3s ease}@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}.slide-in{animation:slideIn 0.3s ease}@keyframes slideIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}#terminal-root ::-webkit-scrollbar{width:6px;height:6px}#terminal-root ::-webkit-scrollbar-track{background:transparent}#terminal-root ::-webkit-scrollbar-thumb{background:var(--term-border);border-radius:3px}#terminal-root ::-webkit-scrollbar-thumb:hover{background:var(--term-text2)}@media(max-width:768px){#terminal-root{font-size:12px}.term-tab{padding:6px 12px;font-size:11px}.term-header{padding:4px 12px;min-height:36px}.term-tab-content{padding:8px 12px}.task-card .task-meta{flex-direction:column;gap:4px}}';
 
   // ── Terminal UI ────────────────────────────────────────────────────────────
-  class TerminalUI {
-    constructor() {
-      this._buildUI();
-      this._bindEvents();
-      this._showWelcome();
-      this._startStatusLoop();
-    }
+  function TerminalUI() {
+    this._buildUI();
+    this._bindEvents();
+    this._showWelcome();
+    this._startStatusLoop();
+  }
 
-    _buildUI() {
-      // Root
-      this.root = document.createElement('div');
-      this.root.id = 'terminal-root';
+  TerminalUI.prototype._buildUI = function() {
+    // Root
+    this.root = document.createElement('div');
+    this.root.id = 'terminal-root';
 
-      // Styles
-      const style = document.createElement('style');
-      style.textContent = terminalStyles;
-      this.root.appendChild(style);
+    // Styles
+    var style = document.createElement('style');
+    style.textContent = terminalStyles;
+    this.root.appendChild(style);
 
-      // Header
-      const header = document.createElement('div');
-      header.className = 'term-header';
-      header.innerHTML = `
-        <div class="term-header-left">
-          <div class="term-dots">
-            <span class="term-dot term-dot-red" title="Fechar"></span>
-            <span class="term-dot term-dot-yellow" title="Minimizar"></span>
-            <span class="term-dot term-dot-green" title="Maximizar"></span>
-          </div>
-          <span class="term-title">⟫ TERMINAL — SALA DO FUTURO</span>
-        </div>
-        <div class="term-header-actions">
-          <button class="term-hbtn" id="term-refresh">⟳ Atualizar</button>
-          <button class="term-hbtn" id="term-close">✕ Fechar</button>
-        </div>
-      `;
-      this.root.appendChild(header);
+    // Header
+    var header = document.createElement('div');
+    header.className = 'term-header';
+    header.innerHTML = '<div class="term-header-left"><div class="term-dots"><span class="term-dot term-dot-red" title="Fechar"></span><span class="term-dot term-dot-yellow" title="Minimizar"></span><span class="term-dot term-dot-green" title="Maximizar"></span></div><span class="term-title">\u27EB TERMINAL \u2014 SALA DO FUTURO</span></div><div class="term-header-actions"><button class="term-hbtn" id="term-refresh">\u27F3 Atualizar</button><button class="term-hbtn" id="term-close">\u2715 Fechar</button></div>';
+    this.root.appendChild(header);
 
-      // Tabs
-      const tabs = document.createElement('div');
-      tabs.className = 'term-tabs';
-      tabs.innerHTML = `
-        <button class="term-tab active" data-tab="dashboard">📊 Dashboard</button>
-        <button class="term-tab" data-tab="tasks">📋 Tarefas <span class="term-tab-badge" id="task-badge">0</span></button>
-        <button class="term-tab" data-tab="assistant">🤖 Assistente</button>
-      `;
-      this.root.appendChild(tabs);
+    // Tabs
+    var tabs = document.createElement('div');
+    tabs.className = 'term-tabs';
+    tabs.innerHTML = '<button class="term-tab active" data-tab="dashboard">\uD83D\uDCCA Dashboard</button><button class="term-tab" data-tab="tasks">\uD83D\uDCCB Tarefas <span class="term-tab-badge" id="task-badge">0</span></button><button class="term-tab" data-tab="assistant">\uD83E\uDD16 Assistente</button>';
+    this.root.appendChild(tabs);
 
-      // Content
-      const content = document.createElement('div');
-      content.className = 'term-content';
+    // Content
+    var content = document.createElement('div');
+    content.className = 'term-content';
 
-      // Dashboard
-      const dashboard = document.createElement('div');
-      dashboard.className = 'term-tab-content active';
-      dashboard.id = 'tab-dashboard';
-      dashboard.innerHTML = `
-        <div class="term-output" id="dashboard-output">
-          <div class="line dim">⏳ Aguardando inicialização...</div>
-        </div>
-      `;
-      content.appendChild(dashboard);
+    // Dashboard
+    var dashboard = document.createElement('div');
+    dashboard.className = 'term-tab-content active';
+    dashboard.id = 'tab-dashboard';
+    dashboard.innerHTML = '<div class="term-output" id="dashboard-output"><div class="line dim">\u23F3 Aguardando inicializa\u00E7\u00E3o...</div></div>';
+    content.appendChild(dashboard);
 
-      // Tasks
-      const tasks = document.createElement('div');
-      tasks.className = 'term-tab-content';
-      tasks.id = 'tab-tasks';
-      tasks.innerHTML = `
-        <div class="term-output" id="tasks-output">
-          <div class="line dim">📭 Nenhuma tarefa carregada</div>
-        </div>
-      `;
-      content.appendChild(tasks);
+    // Tasks
+    var tasks = document.createElement('div');
+    tasks.className = 'term-tab-content';
+    tasks.id = 'tab-tasks';
+    tasks.innerHTML = '<div class="term-output" id="tasks-output"><div class="line dim">\uD83D\uDCED Nenhuma tarefa carregada</div></div>';
+    content.appendChild(tasks);
 
-      // Assistant
-      const assistant = document.createElement('div');
-      assistant.className = 'term-tab-content';
-      assistant.id = 'tab-assistant';
-      assistant.innerHTML = `
-        <div class="ai-chat-container">
-          <div class="ai-messages-area" id="ai-messages"></div>
-          <div class="term-input-area">
-            <span class="prompt-symbol">❯</span>
-            <input type="text" id="ai-input" placeholder="Pergunte sobre a atividade...">
-            <button id="ai-send">Enviar</button>
-          </div>
-        </div>
-      `;
-      content.appendChild(assistant);
+    // Assistant
+    var assistant = document.createElement('div');
+    assistant.className = 'term-tab-content';
+    assistant.id = 'tab-assistant';
+    assistant.innerHTML = '<div class="ai-chat-container"><div class="ai-messages-area" id="ai-messages"></div><div class="term-input-area"><span class="prompt-symbol">\u276F</span><input type="text" id="ai-input" placeholder="Pergunte sobre a atividade..."><button id="ai-send">Enviar</button></div></div>';
+    content.appendChild(assistant);
 
-      this.root.appendChild(content);
+    this.root.appendChild(content);
 
-      // Status bar
-      const status = document.createElement('div');
-      status.className = 'term-status';
-      status.innerHTML = `
-        <div>
-          <span class="status-dot offline" id="status-dot"></span>
-          <span id="status-text">Desconectado</span>
-        </div>
-        <div>
-          <span id="status-user" class="dim">👤 Não autenticado</span>
-          <span class="dim" style="margin-left:16px" id="status-time">${Utils.formatTime()}</span>
-        </div>
-      `;
-      this.root.appendChild(status);
+    // Status bar
+    var status = document.createElement('div');
+    status.className = 'term-status';
+    status.innerHTML = '<div><span class="status-dot offline" id="status-dot"></span><span id="status-text">Desconectado</span></div><div><span id="status-user" class="dim">\uD83D\uDC64 N\u00E3o autenticado</span><span class="dim" style="margin-left:16px" id="status-time">' + Utils.formatTime() + '</span></div>';
+    this.root.appendChild(status);
 
-      document.body.appendChild(this.root);
+    // Adicionar ao body
+    document.body.appendChild(this.root);
 
-      // Cache refs
-      this.tabs = tabs;
-      this.tabContent = content;
-      this.dashboardOutput = document.getElementById('dashboard-output');
-      this.tasksOutput = document.getElementById('tasks-output');
-      this.aiMessages = document.getElementById('ai-messages');
-      this.aiInput = document.getElementById('ai-input');
-      this.aiSend = document.getElementById('ai-send');
-      this.statusDot = document.getElementById('status-dot');
-      this.statusText = document.getElementById('status-text');
-      this.statusUser = document.getElementById('status-user');
-      this.statusTime = document.getElementById('status-time');
-      this.taskBadge = document.getElementById('task-badge');
-    }
+    // Cache refs
+    this.tabs = tabs;
+    this.tabContent = content;
+    this.dashboardOutput = document.getElementById('dashboard-output');
+    this.tasksOutput = document.getElementById('tasks-output');
+    this.aiMessages = document.getElementById('ai-messages');
+    this.aiInput = document.getElementById('ai-input');
+    this.aiSend = document.getElementById('ai-send');
+    this.statusDot = document.getElementById('status-dot');
+    this.statusText = document.getElementById('status-text');
+    this.statusUser = document.getElementById('status-user');
+    this.statusTime = document.getElementById('status-time');
+    this.taskBadge = document.getElementById('task-badge');
+  };
 
-    _bindEvents() {
-      // Tabs
-      this.tabs.addEventListener('click', (e) => {
-        const tab = e.target.closest('.term-tab');
-        if (!tab) return;
+  TerminalUI.prototype._bindEvents = function() {
+    var self = this;
 
-        // Update active tab
-        this.tabs.querySelectorAll('.term-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
+    // Tabs
+    this.tabs.addEventListener('click', function(e) {
+      var tab = e.target.closest('.term-tab');
+      if (!tab) return;
 
-        // Update content
-        const tabId = tab.dataset.tab;
-        this.tabContent.querySelectorAll('.term-tab-content').forEach(c => c.classList.remove('active'));
-        const target = document.getElementById(`tab-${tabId}`);
-        if (target) target.classList.add('active');
+      self.tabs.querySelectorAll('.term-tab').forEach(function(t) { t.classList.remove('active'); });
+      tab.classList.add('active');
 
-        // Refresh data if needed
-        if (tabId === 'tasks' && state.token) {
-          this._loadTasks();
-        }
-      });
+      var tabId = tab.dataset.tab;
+      self.tabContent.querySelectorAll('.term-tab-content').forEach(function(c) { c.classList.remove('active'); });
+      var target = document.getElementById('tab-' + tabId);
+      if (target) target.classList.add('active');
 
-      // Close button
-      document.getElementById('term-close').addEventListener('click', () => {
-        this.root.style.display = 'none';
-      });
-
-      // Refresh button
-      document.getElementById('term-refresh').addEventListener('click', () => {
-        if (state.token) {
-          this._loadTasks();
-          this._appendToDashboard('🔄 Atualizando dados...', 'info');
-        }
-      });
-
-      // AI Chat
-      this.aiSend.addEventListener('click', () => this._sendAI());
-      this.aiInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          this._sendAI();
-        }
-      });
-
-      // Dot buttons
-      const dotRed = this.root.querySelector('.term-dot-red');
-      dotRed.addEventListener('click', () => {
-        if (confirm('Fechar terminal?')) {
-          this.root.style.display = 'none';
-        }
-      });
-
-      const dotYellow = this.root.querySelector('.term-dot-yellow');
-      dotYellow.addEventListener('click', () => {
-        this.root.style.display = this.root.style.display === 'none' ? '' : 'none';
-      });
-
-      const dotGreen = this.root.querySelector('.term-dot-green');
-      dotGreen.addEventListener('click', () => {
-        if (this.root.requestFullscreen) {
-          this.root.requestFullscreen().catch(() => {});
-        }
-      });
-    }
-
-    // ── Dashboard ────────────────────────────────────────────────────────────
-
-    _showWelcome() {
-      this._appendToDashboard(`
-╔═══════════════════════════════════════════════════════════╗
-║                                                           ║
-║   ████████╗███████╗██████╗ ███╗   ███╗██╗███╗   ██╗ █████╗ ██╗      ║
-║   ╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██║████╗  ██║██╔══██╗██║      ║
-║      ██║   █████╗  ██████╔╝██╔████╔██║██║██╔██╗ ██║███████║██║      ║
-║      ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║██║██║╚██╗██║██╔══██║██║      ║
-║      ██║   ███████╗██║  ██║██║ ╚═╝ ██║██║██║ ╚████║██║  ██║███████╗ ║
-║      ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝ ║
-║                                                           ║
-║   ───────────────────────────────────────────────────────   ║
-║   🔐 Aguardando autenticação...                           ║
-║   📋 Faça login no site para iniciar                      ║
-║                                                           ║
-╚═══════════════════════════════════════════════════════════╝
-      `, 'dim');
-    }
-
-    _appendToDashboard(text, type = '') {
-      const lines = text.split('\n');
-      lines.forEach(line => {
-        const div = document.createElement('div');
-        div.className = `line ${type}`;
-        div.innerHTML = line;
-        this.dashboardOutput.appendChild(div);
-      });
-      this.dashboardOutput.scrollTop = this.dashboardOutput.scrollHeight;
-    }
-
-    // ── Tasks ───────────────────────────────────────────────────────────────
-
-    async _loadTasks() {
-      if (!state.token) {
-        this._appendToTasks('❌ Não autenticado. Faça login primeiro.', 'error');
-        return;
+      if (tabId === 'tasks' && state.token) {
+        self._loadTasks();
       }
+    });
 
-      state.loading = true;
-      this._setStatus('Carregando tarefas...', 'busy');
+    // Close button
+    document.getElementById('term-close').addEventListener('click', function() {
+      self.root.style.display = 'none';
+    });
 
-      try {
-        const tasks = await api.getTasks(state.token, state.captcha, state.cf);
-        state.tasks = tasks;
-        
-        this._renderTasks(tasks);
-        this._updateBadge(tasks.pending.length);
-        this._appendToDashboard(`📋 ${tasks.pending.length} tarefas pendentes, ${tasks.expired.length} expiradas`, 'info');
-        this._setStatus(`Pronto (${tasks.pending.length} pendentes)`, 'online');
-
-        // Verificar se há tarefa atual selecionada
-        if (state.currentTask) {
-          const task = tasks.pending.find(t => t.id === state.currentTask.id) ||
-                       tasks.expired.find(t => t.id === state.currentTask.id);
-          if (task) {
-            state.currentTask = task;
-            this._showTaskDetails(task);
-          }
-        }
-      } catch (error) {
-        this._appendToTasks(`❌ Erro: ${error.message}`, 'error');
-        this._setStatus('Erro ao carregar tarefas', 'offline');
+    // Refresh button
+    document.getElementById('term-refresh').addEventListener('click', function() {
+      if (state.token) {
+        self._loadTasks();
+        self._appendToDashboard('\uD83D\uDD04 Atualizando dados...', 'info');
       }
+    });
 
-      state.loading = false;
+    // AI Chat
+    this.aiSend.addEventListener('click', function() { self._sendAI(); });
+    this.aiInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        self._sendAI();
+      }
+    });
+
+    // Dot buttons
+    var dotRed = this.root.querySelector('.term-dot-red');
+    dotRed.addEventListener('click', function() { self.root.style.display = 'none'; });
+
+    var dotYellow = this.root.querySelector('.term-dot-yellow');
+    dotYellow.addEventListener('click', function() {
+      self.root.style.display = self.root.style.display === 'none' ? '' : 'none';
+    });
+
+    var dotGreen = this.root.querySelector('.term-dot-green');
+    dotGreen.addEventListener('click', function() {
+      if (self.root.requestFullscreen) {
+        self.root.requestFullscreen().catch(function() {});
+      }
+    });
+
+    // Prevenir propagação de eventos
+    this.root.addEventListener('click', function(e) {
+      e.stopPropagation();
+    });
+    this.root.addEventListener('keydown', function(e) {
+      e.stopPropagation();
+    });
+  };
+
+  TerminalUI.prototype._showWelcome = function() {
+    this._appendToDashboard('\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557', 'dim');
+    this._appendToDashboard('\u2551                                                           \u2551', 'dim');
+    this._appendToDashboard('\u2551   TERMINAL AI - SALA DO FUTURO                           \u2551', 'highlight');
+    this._appendToDashboard('\u2551                                                           \u2551', 'dim');
+    this._appendToDashboard('\u2551   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500   \u2551', 'dim');
+    this._appendToDashboard('\u2551   \uD83D\uDD12 Aguardando autentica\u00E7\u00E3o...                           \u2551', 'dim');
+    this._appendToDashboard('\u2551   \uD83D\uDCCB Fa\u00E7a login no site para iniciar                      \u2551', 'dim');
+    this._appendToDashboard('\u2551                                                           \u2551', 'dim');
+    this._appendToDashboard('\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D', 'dim');
+  };
+
+  TerminalUI.prototype._appendToDashboard = function(text, type) {
+    type = type || '';
+    var lines = text.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var div = document.createElement('div');
+      div.className = 'line ' + type;
+      div.textContent = lines[i];
+      this.dashboardOutput.appendChild(div);
+    }
+    this.dashboardOutput.scrollTop = this.dashboardOutput.scrollHeight;
+  };
+
+  TerminalUI.prototype._appendToTasks = function(text, type) {
+    type = type || '';
+    var div = document.createElement('div');
+    div.className = 'line ' + type;
+    div.textContent = text;
+    this.tasksOutput.appendChild(div);
+    this.tasksOutput.scrollTop = this.tasksOutput.scrollHeight;
+  };
+
+  TerminalUI.prototype._loadTasks = async function() {
+    if (!state.token) {
+      this._appendToTasks('\u274C N\u00E3o autenticado. Fa\u00E7a login primeiro.', 'error');
+      return;
     }
 
-    _renderTasks(tasks) {
-      const output = this.tasksOutput;
-      output.innerHTML = '';
+    state.loading = true;
+    this._setStatus('Carregando tarefas...', 'busy');
 
-      if (!tasks.pending.length && !tasks.expired.length) {
-        output.innerHTML = `<div class="line dim">🎉 Nenhuma tarefa pendente ou expirada!</div>`;
-        return;
-      }
-
-      // Tarefas pendentes
-      if (tasks.pending.length) {
-        output.appendChild(this._createTaskSection('📌 Pendentes', tasks.pending, 'pending'));
-      }
-
-      // Tarefas expiradas
-      if (tasks.expired.length) {
-        output.appendChild(this._createTaskSection('⏰ Expiradas', tasks.expired, 'expired'));
-      }
+    try {
+      var tasks = await api.getTasks(state.token, state.captcha, state.cf);
+      state.tasks = tasks;
+      
+      this._renderTasks(tasks);
+      this._updateBadge(tasks.pending.length);
+      this._appendToDashboard('\uD83D\uDCCB ' + tasks.pending.length + ' tarefas pendentes, ' + tasks.expired.length + ' expiradas', 'info');
+      this._setStatus('Pronto (' + tasks.pending.length + ' pendentes)', 'online');
+    } catch (error) {
+      this._appendToTasks('\u274C Erro: ' + error.message, 'error');
+      this._setStatus('Erro ao carregar tarefas', 'offline');
     }
 
-    _createTaskSection(title, tasks, status) {
-      const section = document.createElement('div');
-      section.className = 'fade-in';
+    state.loading = false;
+  };
 
-      const header = document.createElement('div');
-      header.className = 'line highlight';
-      header.textContent = `\n${title} (${tasks.length})`;
-      section.appendChild(header);
+  TerminalUI.prototype._renderTasks = function(tasks) {
+    var output = this.tasksOutput;
+    output.innerHTML = '';
 
-      tasks.forEach(task => {
-        const card = document.createElement('div');
+    if (!tasks.pending.length && !tasks.expired.length) {
+      output.innerHTML = '<div class="line dim">\uD83C\uDF89 Nenhuma tarefa pendente ou expirada!</div>';
+      return;
+    }
+
+    if (tasks.pending.length) {
+      output.appendChild(this._createTaskSection('\uD83D\uDCCC Pendentes', tasks.pending, 'pending'));
+    }
+
+    if (tasks.expired.length) {
+      output.appendChild(this._createTaskSection('\u23F0 Expiradas', tasks.expired, 'expired'));
+    }
+  };
+
+  TerminalUI.prototype._createTaskSection = function(title, tasks, status) {
+    var self = this;
+    var section = document.createElement('div');
+    section.className = 'fade-in';
+
+    var header = document.createElement('div');
+    header.className = 'line highlight';
+    header.textContent = '\n' + title + ' (' + tasks.length + ')';
+    section.appendChild(header);
+
+    for (var i = 0; i < tasks.length; i++) {
+      (function(task) {
+        var card = document.createElement('div');
         card.className = 'task-card slide-in';
-        card.innerHTML = `
-          <div class="task-title">${Utils.escapeHtml(task.title)}</div>
-          <div class="task-meta">
-            <span>🆔 #${task.id}</span>
-            <span>📅 Expira: ${task.expire_at}</span>
-            <span>📍 ${task.publication_target || 'N/A'}</span>
-            <span class="task-status ${status}">${status === 'pending' ? '🟢 Pendente' : '🔴 Expirada'}</span>
-          </div>
-          ${task.description ? `<div class="line dim" style="font-size:12px;margin:4px 0">${Utils.escapeHtml(task.description)}</div>` : ''}
-          <div class="task-actions">
-            <button class="primary" data-action="view" data-id="${task.id}" data-target="${task.publication_target}">👁️ Visualizar Respostas</button>
-            ${status === 'pending' ? `<button class="primary" data-action="complete" data-id="${task.id}" data-target="${task.publication_target}">✅ Realizar Tarefa</button>` : ''}
-            <button data-action="details" data-id="${task.id}" data-target="${task.publication_target}">📖 Detalhes</button>
-          </div>
-        `;
+        
+        var actionsHtml = '<button class="primary" data-action="view" data-id="' + task.id + '" data-target="' + Utils.escapeHtml(task.publication_target) + '">\uD83D\uDC41\uFE0F Ver Respostas</button>';
+        if (status === 'pending') {
+          actionsHtml += ' <button class="primary" data-action="complete" data-id="' + task.id + '" data-target="' + Utils.escapeHtml(task.publication_target) + '">\u2705 Realizar</button>';
+        }
+        actionsHtml += ' <button data-action="details" data-id="' + task.id + '" data-target="' + Utils.escapeHtml(task.publication_target) + '">\uD83D\uDCD6 Detalhes</button>';
+
+        card.innerHTML = '<div class="task-title">' + Utils.escapeHtml(task.title) + '</div><div class="task-meta"><span>\uD83C\uDD94 #' + task.id + '</span><span>\uD83D\uDCC5 Expira: ' + task.expire_at + '</span><span>\uD83D\uDCCD ' + Utils.escapeHtml(task.publication_target || 'N/A') + '</span><span class="task-status ' + status + '">' + (status === 'pending' ? '\uD83D\uDFE2 Pendente' : '\uD83D\uDD34 Expirada') + '</span></div><div class="task-actions">' + actionsHtml + '</div>';
+        
         section.appendChild(card);
 
-        // Bind actions
-        card.querySelectorAll('[data-action]').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const action = btn.dataset.action;
-            const id = parseInt(btn.dataset.id);
-            const target = btn.dataset.target;
-            this._handleTaskAction(action, id, target);
+        card.querySelectorAll('[data-action]').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var action = btn.dataset.action;
+            var id = parseInt(btn.dataset.id);
+            var target = btn.dataset.target;
+            self._handleTaskAction(action, id, target);
           });
         });
+      })(tasks[i]);
+    }
+
+    return section;
+  };
+
+  TerminalUI.prototype._updateBadge = function(count) {
+    this.taskBadge.textContent = count;
+    this.taskBadge.style.display = count > 0 ? 'inline-block' : 'none';
+  };
+
+  TerminalUI.prototype._handleTaskAction = async function(action, taskId, target) {
+    if (state.loading) return;
+
+    try {
+      if (action === 'view') {
+        await this._viewAnswers(taskId, target);
+      } else if (action === 'complete') {
+        await this._completeTask(taskId, target);
+      } else if (action === 'details') {
+        await this._showTaskDetailsById(taskId, target);
+      }
+    } catch (error) {
+      this._appendToTasks('\u274C Erro: ' + error.message, 'error');
+      this._setStatus('Erro', 'offline');
+    }
+  };
+
+  TerminalUI.prototype._viewAnswers = async function(taskId, target) {
+    this._setStatus('Buscando respostas...', 'busy');
+    this._appendToTasks('\n\uD83D\uDD0D Buscando respostas da tarefa #' + taskId + '...', 'info');
+
+    var answers = await api.getTaskAnswers(state.token, taskId, target);
+    
+    if (!answers || (Array.isArray(answers) && !answers.length)) {
+      this._appendToTasks('\uD83D\uDCED Nenhuma resposta encontrada.', 'dim');
+      return;
+    }
+
+    this._appendToTasks('\uD83D\uDCDD Respostas encontradas:', 'success');
+    
+    if (Array.isArray(answers)) {
+      for (var i = 0; i < answers.length; i++) {
+        var ans = answers[i];
+        this._appendToTasks('  ' + (i+1) + '. ' + (ans.question || 'Quest\u00E3o') + ':', 'info');
+        this._appendToTasks('     Resposta: ' + (ans.answer || 'N/A'), 'dim');
+      }
+    } else {
+      this._appendToTasks(JSON.stringify(answers, null, 2), 'dim');
+    }
+
+    this._setStatus('Respostas carregadas', 'online');
+  };
+
+  TerminalUI.prototype._completeTask = async function(taskId, target) {
+    this._setStatus('Realizando tarefa... Aguarde', 'busy');
+    this._appendToTasks('\n\u23F3 Realizando tarefa #' + taskId + '...', 'warn');
+
+    try {
+      var result = await api.completeTask(state.token, state.captcha, taskId, target, 90, state.cf, false);
+
+      if (result.success) {
+        this._appendToTasks('\u2705 Tarefa #' + taskId + ' realizada com sucesso! (' + result.wait + 's)', 'success');
+        this._setStatus('Tarefa conclu\u00EDda!', 'online');
+        setTimeout(this._loadTasks.bind(this), 2000);
+      }
+    } catch (error) {
+      this._appendToTasks('\u274C Falha ao realizar tarefa: ' + error.message, 'error');
+      this._setStatus('Erro na tarefa', 'offline');
+    }
+  };
+
+  TerminalUI.prototype._showTaskDetailsById = async function(taskId, target) {
+    this._setStatus('Carregando detalhes...', 'busy');
+    this._appendToTasks('\n\uD83D\uDCD6 Detalhes da tarefa #' + taskId, 'info');
+
+    var allTasks = state.tasks.pending.concat(state.tasks.expired);
+    var task = null;
+    for (var i = 0; i < allTasks.length; i++) {
+      if (allTasks[i].id === taskId) {
+        task = allTasks[i];
+        break;
+      }
+    }
+    
+    if (task) {
+      this._showTaskDetails(task);
+    } else {
+      this._appendToTasks('\u274C Tarefa n\u00E3o encontrada.', 'error');
+    }
+
+    this._setStatus('Pronto', 'online');
+  };
+
+  TerminalUI.prototype._showTaskDetails = function(task) {
+    state.currentTask = task;
+    
+    this._appendToTasks('\u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+    this._appendToTasks('\u2502 \uD83D\uDCCB ' + Utils.escapeHtml(task.title), 'highlight');
+    this._appendToTasks('\u251C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+    this._appendToTasks('\u2502 \uD83C\uDD94 ID: ' + task.id);
+    this._appendToTasks('\u2502 \uD83D\uDCC5 Expira: ' + task.expire_at);
+    this._appendToTasks('\u2502 \uD83D\uDCCD Local: ' + (task.publication_target || 'N/A'));
+    this._appendToTasks('\u2502 \uD83D\uDCCC Status: ' + task.tipo);
+    this._appendToTasks('\u251C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+    
+    if (task.questions && task.questions.length) {
+      this._appendToTasks('\u2502 \uD83D\uDCDD Quest\u00F5es (' + task.questions.length + '):');
+      for (var i = 0; i < task.questions.length; i++) {
+        var q = task.questions[i];
+        this._appendToTasks('\u2502   ' + (i+1) + '. ' + Utils.escapeHtml(q.text || q.question || 'Quest\u00E3o'));
+      }
+    }
+
+    this._appendToTasks('\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+  };
+
+  TerminalUI.prototype._sendAI = async function() {
+    var text = this.aiInput.value.trim();
+    if (!text || state.loading) return;
+
+    this.aiInput.value = '';
+    this.aiInput.disabled = true;
+    this.aiSend.disabled = true;
+
+    this._addAIMessage('user', text);
+
+    var contextMessage = text;
+    if (state.currentTask) {
+      contextMessage = 'Contexto: Tarefa "' + state.currentTask.title + '" (ID: ' + state.currentTask.id + ')\nPergunta: ' + text;
+    }
+
+    var messages = [
+      { role: 'system', content: 'Voc\u00EA \u00E9 um assistente educacional especializado em ajudar alunos com atividades da Sala do Futuro. Responda de forma clara, did\u00E1tica e em portugu\u00EAs.' }
+    ];
+    
+    for (var i = 0; i < state.aiHistory.length; i++) {
+      messages.push(state.aiHistory[i]);
+    }
+    messages.push({ role: 'user', content: contextMessage });
+
+    try {
+      var typingDiv = document.createElement('div');
+      typingDiv.className = 'typing-indicator';
+      typingDiv.innerHTML = '\uD83E\uDD16 Pensando<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>';
+      this.aiMessages.appendChild(typingDiv);
+      this.aiMessages.scrollTop = this.aiMessages.scrollHeight;
+
+      var fullResponse = '';
+      var self = this;
+      var msgDiv = document.createElement('div');
+      msgDiv.className = 'ai-message assistant fade-in';
+      msgDiv.innerHTML = '<div class="msg-role">Assistente</div><div class="msg-content"></div>';
+      this.aiMessages.appendChild(msgDiv);
+
+      await api.chat(messages, function(chunk) {
+        fullResponse += chunk;
+        var contentEl = msgDiv.querySelector('.msg-content');
+        contentEl.textContent = fullResponse;
+        self.aiMessages.scrollTop = self.aiMessages.scrollHeight;
       });
 
-      return section;
-    }
+      typingDiv.remove();
 
-    _appendToTasks(text, type = '') {
-      const div = document.createElement('div');
-      div.className = `line ${type}`;
-      div.textContent = text;
-      this.tasksOutput.appendChild(div);
-      this.tasksOutput.scrollTop = this.tasksOutput.scrollHeight;
-    }
+      state.aiHistory.push({ role: 'user', content: text });
+      state.aiHistory.push({ role: 'assistant', content: fullResponse });
 
-    _updateBadge(count) {
-      this.taskBadge.textContent = count;
-      this.taskBadge.style.display = count > 0 ? 'inline-block' : 'none';
-    }
-
-    // ── Task Actions ────────────────────────────────────────────────────────
-
-    async _handleTaskAction(action, taskId, target) {
-      if (state.loading) return;
-
-      try {
-        switch (action) {
-          case 'view':
-            await this._viewAnswers(taskId, target);
-            break;
-          case 'complete':
-            await this._completeTask(taskId, target);
-            break;
-          case 'details':
-            await this._showTaskDetailsById(taskId, target);
-            break;
-        }
-      } catch (error) {
-        this._appendToTasks(`❌ Erro: ${error.message}`, 'error');
-        this._setStatus('Erro', 'offline');
-      }
-    }
-
-    async _viewAnswers(taskId, target) {
-      this._setStatus('Buscando respostas...', 'busy');
-      this._appendToTasks(`\n🔍 Buscando respostas da tarefa #${taskId}...`, 'info');
-
-      const answers = await api.getTaskAnswers(state.token, taskId, target);
-      
-      if (!answers || (Array.isArray(answers) && !answers.length)) {
-        this._appendToTasks('📭 Nenhuma resposta encontrada para esta tarefa.', 'dim');
-        return;
+      if (state.aiHistory.length > 20) {
+        state.aiHistory = state.aiHistory.slice(-20);
       }
 
-      this._appendToTasks(`📝 Encontradas ${answers.length} respostas:`, 'success');
-      
-      if (Array.isArray(answers)) {
-        answers.forEach((ans, i) => {
-          this._appendToTasks(`\n  ${i+1}. ${ans.question || 'Questão'}:`, 'info');
-          this._appendToTasks(`     Resposta: ${ans.answer || 'N/A'}`, 'dim');
-          if (ans.correct) {
-            this._appendToTasks(`     ✅ Correta`, 'success');
-          }
-        });
-      } else {
-        this._appendToTasks(JSON.stringify(answers, null, 2), 'dim');
-      }
-
-      this._setStatus('Respostas carregadas', 'online');
+    } catch (error) {
+      this._appendToDashboard('\u274C Erro no assistente: ' + error.message, 'error');
+      var errorDiv = document.createElement('div');
+      errorDiv.className = 'ai-message assistant fade-in';
+      errorDiv.innerHTML = '<div class="msg-role">Erro</div><div class="msg-content" style="color:var(--term-error)">\u26A0\uFE0F ' + Utils.escapeHtml(error.message) + '</div>';
+      this.aiMessages.appendChild(errorDiv);
     }
 
-    async _completeTask(taskId, target) {
-      if (!confirm(`Realizar tarefa #${taskId}? Isso pode levar alguns minutos.`)) return;
+    this.aiInput.disabled = false;
+    this.aiSend.disabled = false;
+    this.aiInput.focus();
+    this.aiMessages.scrollTop = this.aiMessages.scrollHeight;
+  };
 
-      this._setStatus('Realizando tarefa... Aguarde', 'busy');
-      this._appendToTasks(`\n⏳ Realizando tarefa #${taskId}...`, 'warn');
+  TerminalUI.prototype._addAIMessage = function(role, content) {
+    var div = document.createElement('div');
+    div.className = 'ai-message ' + role + ' fade-in';
+    div.innerHTML = '<div class="msg-role">' + (role === 'user' ? '\uD83D\uDC64 Voc\u00EA' : '\uD83E\uDD16 Assistente') + '</div><div class="msg-content">' + Utils.escapeHtml(content) + '</div>';
+    this.aiMessages.appendChild(div);
+    this.aiMessages.scrollTop = this.aiMessages.scrollHeight;
+  };
 
-      try {
-        const result = await api.completeTask(
-          state.token,
-          state.captcha,
-          taskId,
-          target,
-          90,
-          state.cf,
-          false
-        );
+  TerminalUI.prototype._setStatus = function(text, statusState) {
+    statusState = statusState || 'online';
+    this.statusText.textContent = text;
+    this.statusDot.className = 'status-dot ' + statusState;
+  };
 
-        if (result.success) {
-          this._appendToTasks(`✅ Tarefa #${taskId} realizada com sucesso! (${result.wait}s)`, 'success');
-          this._setStatus('Tarefa concluída!', 'online');
-          
-          // Recarregar tarefas
-          setTimeout(() => this._loadTasks(), 2000);
-        }
-      } catch (error) {
-        this._appendToTasks(`❌ Falha ao realizar tarefa: ${error.message}`, 'error');
-        this._setStatus('Erro na tarefa', 'offline');
-      }
-    }
+  TerminalUI.prototype._startStatusLoop = function() {
+    var self = this;
+    setInterval(function() {
+      self.statusTime.textContent = Utils.formatTime();
+    }, 1000);
+  };
 
-    async _showTaskDetailsById(taskId, target) {
-      this._setStatus('Carregando detalhes...', 'busy');
-      this._appendToTasks(`\n📖 Detalhes da tarefa #${taskId}`, 'info');
+  TerminalUI.prototype.updateUser = function(userData) {
+    state.user = userData;
+    state.token = userData.token;
+    
+    this.statusUser.textContent = '\uD83D\uDC64 ' + userData.nome + ' (' + userData.ra + ')';
+    this._setStatus('Autenticado', 'online');
+    
+    this._appendToDashboard('\n\u2705 Autenticado como ' + userData.nome, 'success');
+    this._appendToDashboard('\uD83D\uDCE7 ' + (userData.email || 'Sem email'), 'dim');
+    this._appendToDashboard('\uD83C\uDFEB ' + (userData.escola || 'Escola n\u00E3o informada'), 'dim');
+    this._appendToDashboard('\n\uD83D\uDD04 Carregando tarefas...', 'info');
 
-      try {
-        // Buscar detalhes da tarefa
-        const allTasks = [...state.tasks.pending, ...state.tasks.expired];
-        const task = allTasks.find(t => t.id === taskId);
-        
-        if (task) {
-          this._showTaskDetails(task);
-        } else {
-          // Tentar buscar via API
-          const tasks = await api.getTasks(state.token, state.captcha, state.cf);
-          const found = [...tasks.pending, ...tasks.expired].find(t => t.id === taskId);
-          if (found) {
-            this._showTaskDetails(found);
-          } else {
-            this._appendToTasks('❌ Tarefa não encontrada.', 'error');
-          }
-        }
-      } catch (error) {
-        this._appendToTasks(`❌ Erro: ${error.message}`, 'error');
-      }
-
-      this._setStatus('Pronto', 'online');
-    }
-
-    _showTaskDetails(task) {
-      state.currentTask = task;
-      
-      this._appendToTasks(`\n┌─────────────────────────────────────────────`);
-      this._appendToTasks(`│ 📋 ${Utils.escapeHtml(task.title)}`, 'highlight');
-      this._appendToTasks(`├─────────────────────────────────────────────`);
-      this._appendToTasks(`│ 🆔 ID: ${task.id}`);
-      this._appendToTasks(`│ 📅 Expira: ${task.expire_at}`);
-      this._appendToTasks(`│ 📍 Local: ${task.publication_target || 'N/A'}`);
-      this._appendToTasks(`│ 📌 Status: ${task.tipo}`);
-      this._appendToTasks(`├─────────────────────────────────────────────`);
-      
-      if (task.description) {
-        this._appendToTasks(`│ 📝 ${Utils.escapeHtml(task.description)}`);
-        this._appendToTasks(`├─────────────────────────────────────────────`);
-      }
-
-      if (task.questions && task.questions.length) {
-        this._appendToTasks(`│ 📝 Questões (${task.questions.length}):`);
-        task.questions.forEach((q, i) => {
-          this._appendToTasks(`│   ${i+1}. ${Utils.escapeHtml(q.text || q.question || 'Questão')}`);
-        });
-      }
-
-      this._appendToTasks(`└─────────────────────────────────────────────`);
-      this._appendToTasks(`\n💡 Use "Visualizar Respostas" para ver as respostas já enviadas.`);
-    }
-
-    // ── AI Assistant ────────────────────────────────────────────────────────
-
-    async _sendAI() {
-      const text = this.aiInput.value.trim();
-      if (!text || state.loading) return;
-
-      this.aiInput.value = '';
-      this.aiInput.disabled = true;
-      this.aiSend.disabled = true;
-
-      // Adicionar mensagem do usuário
-      this._addAIMessage('user', text);
-
-      // Adicionar contexto da tarefa atual se houver
-      let contextMessage = text;
-      if (state.currentTask) {
-        contextMessage = `Contexto: Tarefa "${state.currentTask.title}" (ID: ${state.currentTask.id})\nPergunta: ${text}`;
-      }
-
-      // Histórico para a IA
-      const messages = [
-        { role: 'system', content: 'Você é um assistente educacional especializado em ajudar alunos com atividades da Sala do Futuro. Responda de forma clara, didática e em português.' },
-        ...state.aiHistory,
-        { role: 'user', content: contextMessage }
-      ];
-
-      try {
-        // Mostrar indicador de digitação
-        const typingDiv = document.createElement('div');
-        typingDiv.className = 'typing-indicator';
-        typingDiv.innerHTML = '🤖 Pensando<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>';
-        this.aiMessages.appendChild(typingDiv);
-        this.aiMessages.scrollTop = this.aiMessages.scrollHeight;
-
-        let fullResponse = '';
-        const msgDiv = document.createElement('div');
-        msgDiv.className = 'ai-message assistant fade-in';
-        msgDiv.innerHTML = `
-          <div class="msg-role">Assistente</div>
-          <div class="msg-content"></div>
-        `;
-        this.aiMessages.appendChild(msgDiv);
-
-        await api.chat(messages, (chunk) => {
-          fullResponse += chunk;
-          const contentEl = msgDiv.querySelector('.msg-content');
-          contentEl.textContent = fullResponse;
-          this.aiMessages.scrollTop = this.aiMessages.scrollHeight;
-        });
-
-        // Remover indicador de digitação
-        typingDiv.remove();
-
-        // Adicionar ao histórico
-        state.aiHistory.push({ role: 'user', content: text });
-        state.aiHistory.push({ role: 'assistant', content: fullResponse });
-
-        // Manter histórico limitado
-        if (state.aiHistory.length > 20) {
-          state.aiHistory = state.aiHistory.slice(-20);
-        }
-
-      } catch (error) {
-        this._appendToDashboard(`❌ Erro no assistente: ${error.message}`, 'error');
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'ai-message assistant fade-in';
-        errorDiv.innerHTML = `
-          <div class="msg-role">Erro</div>
-          <div class="msg-content" style="color:var(--term-error)">⚠️ ${Utils.escapeHtml(error.message)}</div>
-        `;
-        this.aiMessages.appendChild(errorDiv);
-      }
-
-      this.aiInput.disabled = false;
-      this.aiSend.disabled = false;
-      this.aiInput.focus();
-      this.aiMessages.scrollTop = this.aiMessages.scrollHeight;
-    }
-
-    _addAIMessage(role, content) {
-      const div = document.createElement('div');
-      div.className = `ai-message ${role} fade-in`;
-      div.innerHTML = `
-        <div class="msg-role">${role === 'user' ? '👤 Você' : '🤖 Assistente'}</div>
-        <div class="msg-content">${Utils.escapeHtml(content)}</div>
-      `;
-      this.aiMessages.appendChild(div);
-      this.aiMessages.scrollTop = this.aiMessages.scrollHeight;
-    }
-
-    // ── Status ──────────────────────────────────────────────────────────────
-
-    _setStatus(text, state2 = 'online') {
-      this.statusText.textContent = text;
-      this.statusDot.className = `status-dot ${state2}`;
-    }
-
-    _startStatusLoop() {
-      setInterval(() => {
-        this.statusTime.textContent = Utils.formatTime();
-      }, 1000);
-    }
-
-    // ── User Update ─────────────────────────────────────────────────────────
-
-    updateUser(userData) {
-      state.user = userData;
-      state.token = userData.token;
-      
-      this.statusUser.textContent = `👤 ${userData.nome} (${userData.ra})`;
-      this._setStatus('Autenticado', 'online');
-      
-      this._appendToDashboard(`\n✅ Autenticado como ${userData.nome}`, 'success');
-      this._appendToDashboard(`📧 ${userData.email || 'Sem email'}`, 'dim');
-      this._appendToDashboard(`🏫 ${userData.escola || 'Escola não informada'}`, 'dim');
-      this._appendToDashboard(`\n🔄 Carregando tarefas...`, 'info');
-
-      // Carregar tarefas
-      this._loadTasks();
-    }
-
-    // ── Expor métodos para o app ────────────────────────────────────────────
-
-    appendToDashboard(text, type = '') {
-      this._appendToDashboard(text, type);
-    }
-
-    appendToTasks(text, type = '') {
-      this._appendToTasks(text, type);
-    }
-
-    setStatus(text, state2 = 'online') {
-      this._setStatus(text, state2);
-    }
-
-    getTaskBadge() {
-      return this.taskBadge;
-    }
-  }
+    this._loadTasks();
+  };
 
   // ── Main App ──────────────────────────────────────────────────────────────
 
-  class App {
-    constructor() {
-      // Verificar se já existe
-      if (window.__terminalInstance) {
-        window.__terminalInstance.root.style.display = '';
-        return;
+  function App() {
+    this.ui = new TerminalUI();
+    this._setupLoginDetection();
+    
+    window.__terminalInstance = this;
+  }
+
+  App.prototype._setupLoginDetection = function() {
+    this._interceptFetch();
+    this._checkStoredToken();
+    this._observeDOM();
+    this._tryCaptureLogin();
+
+    this.ui._appendToDashboard('\uD83D\uDD0D Monitorando login...', 'dim');
+    this.ui._appendToDashboard('\uD83D\uDCA1 Fa\u00E7a login no site para conectar automaticamente.', 'dim');
+  };
+
+  App.prototype._interceptFetch = function() {
+    var originalFetch = window.fetch;
+    var self = this;
+
+    window.fetch = function() {
+      var args = arguments;
+      var url = args[0];
+      if (typeof url === 'string') {
+        if (url.indexOf('LoginCompletoToken') !== -1 || url.indexOf('/login') !== -1) {
+          return originalFetch.apply(this, args).then(function(response) {
+            var clone = response.clone();
+            clone.json().then(function(data) {
+              if (data.token || data.accessToken || data.access_token) {
+                self._handleLoginData(data);
+              }
+            }).catch(function() {});
+            return response;
+          }).catch(function(err) {
+            return Promise.reject(err);
+          });
+        }
+
+        if (url.indexOf('/registration/edusp/token') !== -1) {
+          return originalFetch.apply(this, args).then(function(response) {
+            var clone = response.clone();
+            clone.json().then(function(data) {
+              if (data.token || data.access_token) {
+                state.token = data.token || data.access_token;
+                state.captcha = data.captcha;
+                console.log('[Terminal] Token EDUSP capturado');
+              }
+            }).catch(function() {});
+            return response;
+          }).catch(function(err) {
+            return Promise.reject(err);
+          });
+        }
       }
+      return originalFetch.apply(this, args);
+    };
+  };
 
-      this.ui = new TerminalUI();
-      this._setupLoginDetection();
-      
-      window.__terminalInstance = this;
-    }
-
-    _setupLoginDetection() {
-      // Detectar login via interceptação de requisições
-      this._interceptFetch();
-
-      // Verificar localStorage por token
-      this._checkStoredToken();
-
-      // Observar mudanças no DOM
-      this._observeDOM();
-
-      // Tentar capturar dados do login
-      this._tryCaptureLogin();
-
-      this.ui.appendToDashboard('🔍 Monitorando login...', 'dim');
-      this.ui.appendToDashboard('💡 Faça login no site para conectar automaticamente.', 'dim');
-    }
-
-    _interceptFetch() {
-      const originalFetch = window.fetch;
-      const self = this;
-
-      window.fetch = function(...args) {
-        const url = args[0];
-        if (typeof url === 'string') {
-          // Interceptar login
-          if (url.includes('/LoginCompletoToken') || url.includes('/login')) {
-            return originalFetch.apply(this, args).then(async (response) => {
-              const clone = response.clone();
-              try {
-                const data = await clone.json();
-                if (data.token || data.accessToken || data.access_token) {
-                  self._handleLoginData(data);
-                }
-              } catch (e) {}
-              return response;
-            });
-          }
-
-          // Interceptar token EDUSP
-          if (url.includes('/registration/edusp/token')) {
-            return originalFetch.apply(this, args).then(async (response) => {
-              const clone = response.clone();
-              try {
-                const data = await clone.json();
-                if (data.token || data.access_token) {
-                  // Atualizar token se necessário
-                }
-              } catch (e) {}
-              return response;
-            });
+  App.prototype._checkStoredToken = function() {
+    // Verificar localStorage
+    var keys = ['userData', 'user', 'token', 'auth', 'loginData', 'salaDoFuturo'];
+    for (var i = 0; i < keys.length; i++) {
+      try {
+        var stored = localStorage.getItem(keys[i]);
+        if (stored) {
+          var data = JSON.parse(stored);
+          if (data && (data.token || data.accessToken || data.access_token)) {
+            this._handleLoginData(data);
+            return;
           }
         }
-        return originalFetch.apply(this, args);
-      };
+      } catch (e) {}
     }
 
-    _checkStoredToken() {
-      // Verificar localStorage
-      const stored = localStorage.getItem('userData');
-      if (stored) {
-        try {
-          const data = JSON.parse(stored);
-          if (data.token) {
-            this._handleLoginData(data);
+    // Verificar sessionStorage
+    for (var j = 0; j < keys.length; j++) {
+      try {
+        var session = sessionStorage.getItem(keys[j]);
+        if (session) {
+          var data2 = JSON.parse(session);
+          if (data2 && (data2.token || data2.accessToken || data2.access_token)) {
+            this._handleLoginData(data2);
+            return;
           }
-        } catch (e) {}
-      }
-
-      // Verificar sessionStorage
-      const session = sessionStorage.getItem('userData');
-      if (session) {
-        try {
-          const data = JSON.parse(session);
-          if (data.token) {
-            this._handleLoginData(data);
-          }
-        } catch (e) {}
-      }
+        }
+      } catch (e) {}
     }
+  };
 
-    _observeDOM() {
-      const observer = new MutationObserver(() => {
-        this._tryCaptureLogin();
-      });
+  App.prototype._observeDOM = function() {
+    var self = this;
+    
+    // Observer para mudanças no DOM
+    var observer = new MutationObserver(function(mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var mutation = mutations[i];
+        if (mutation.type === 'childList') {
+          for (var j = 0; j < mutation.addedNodes.length; j++) {
+            var node = mutation.addedNodes[j];
+            if (node.nodeType === 1) {
+              // Verificar se contém informações de login
+              self._checkNodeForLoginData(node);
+            }
+          }
+        }
+      }
+    });
+
+    // Observar body inteiro
+    if (document.body) {
       observer.observe(document.body, {
         childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['data-user', 'data-token', 'data-ra']
+        subtree: true
       });
     }
+  };
 
-    _tryCaptureLogin() {
-      // Tentar capturar dados de elementos da página
-      const elements = document.querySelectorAll('[data-user], [data-token], [data-ra]');
-      for (const el of elements) {
-        const user = el.dataset.user || el.dataset.ra;
-        const token = el.dataset.token;
-        if (user && token) {
-          this._handleLoginData({ nome: user, ra: user, token });
-          return;
-        }
+  App.prototype._checkNodeForLoginData = function(node) {
+    // Verificar por elementos com dados de usuário
+    if (node.dataset && node.dataset.token) {
+      this._handleLoginData({ token: node.dataset.token });
+    }
+
+    // Verificar por inputs hidden com tokens
+    var inputs = node.querySelectorAll ? node.querySelectorAll('input[type="hidden"]') : [];
+    for (var i = 0; i < inputs.length; i++) {
+      var input = inputs[i];
+      if (input.name && (input.name.indexOf('token') !== -1 || input.name.indexOf('Token') !== -1) && input.value) {
+        this._handleLoginData({ token: input.value });
+        return;
       }
+    }
+  };
 
-      // Tentar extrair de scripts
-      const scripts = document.querySelectorAll('script');
-      for (const script of scripts) {
-        const content = script.textContent || '';
-        const tokenMatch = content.match(/["'](?:token|accessToken|access_token)["']\s*:\s*["']([^"']+)["']/);
-        const userMatch = content.match(/["'](?:nome|userName|name)["']\s*:\s*["']([^"']+)["']/);
-        const raMatch = content.match(/["'](?:ra|userId)["']\s*:\s*["']([^"']+)["']/);
-        
-        if (tokenMatch) {
-          const data = { token: tokenMatch[1] };
-          if (userMatch) data.nome = userMatch[1];
-          if (raMatch) data.ra = raMatch[1];
-          this._handleLoginData(data);
+  App.prototype._tryCaptureLogin = function() {
+    var self = this;
+    
+    // Verificar se já existe token em cookies
+    var cookies = document.cookie.split(';');
+    for (var i = 0; i < cookies.length; i++) {
+      var cookie = cookies[i].trim();
+      if (cookie.indexOf('token=') === 0 || cookie.indexOf('Token=') === 0 || cookie.indexOf('auth=') === 0) {
+        var value = cookie.split('=')[1];
+        if (value && value.length > 10) {
+          console.log('[Terminal] Token encontrado em cookies');
+          this._handleLoginData({ token: value, nome: 'Usu\u00E1rio (via cookie)', ra: 'N/A' });
           return;
         }
       }
     }
 
-    _handleLoginData(data) {
-      // Evitar processamento duplicado
-      if (state.token && state.token === data.token) return;
-      if (!data.token) return;
-
-      // Extrair informações do usuário
-      const userData = {
-        nome: data.nome || data.userName || data.name || data.usuario || 'Usuário',
-        ra: data.ra || data.userId || data.ra || data.username || 'N/A',
-        token: data.token || data.accessToken || data.access_token,
-        email: data.email || data.userEmail || '',
-        escola: data.escola || data.schoolName || data.school || '',
-        turma: data.turma || data.className || data.class || ''
-      };
-
-      // Salvar para persistência
-      localStorage.setItem('userData', JSON.stringify(userData));
-      sessionStorage.setItem('userData', JSON.stringify(userData));
-
-      // Extrair captcha e cf se disponíveis
-      state.captcha = data.captcha || data.captchaToken || '';
-      state.cf = data.cf || data.cloudflare || '';
-
-      this.ui.updateUser(userData);
-      this.ui.appendToDashboard(`\n📡 Captcha: ${state.captcha ? '✅' : '⚠️ Não capturado'}`, state.captcha ? 'success' : 'warn');
-      
-      // Mostrar info da escola
-      if (userData.escola) {
-        this.ui.appendToDashboard(`🏫 Escola: ${userData.escola}`, 'dim');
-      }
-      if (userData.turma) {
-        this.ui.appendToDashboard(`📚 Turma: ${userData.turma}`, 'dim');
-      }
-    }
-
-    // Método para login manual (via console)
-    async manualLogin(ra, senha, turnstileToken) {
+    // Verificar variáveis globais comuns
+    var globalVars = ['userData', 'userToken', 'authToken', 'appState', '__NEXT_DATA__', '__NUXT__'];
+    for (var j = 0; j < globalVars.length; j++) {
       try {
-        const userData = await api.login(ra, senha, turnstileToken);
-        this._handleLoginData(userData);
-        return userData;
-      } catch (error) {
-        this.ui.appendToDashboard(`❌ Erro no login: ${error.message}`, 'error');
-        throw error;
-      }
+        var globalData = window[globalVars[j]];
+        if (globalData) {
+          var parsed = typeof globalData === 'string' ? JSON.parse(globalData) : globalData;
+          var token = this._findTokenInObject(parsed);
+          if (token) {
+            console.log('[Terminal] Token encontrado em window.' + globalVars[j]);
+            this._handleLoginData({ token: token });
+            return;
+          }
+        }
+      } catch (e) {}
     }
+
+    // Verificar se já está logado via verificação de API
+    this._checkExistingSession();
+  };
+
+  App.prototype._findTokenInObject = function(obj, depth) {
+    depth = depth || 0;
+    if (depth > 5 || !obj || typeof obj !== 'object') return null;
+
+    if (obj.token && typeof obj.token === 'string' && obj.token.length > 10) return obj.token;
+    if (obj.accessToken && typeof obj.accessToken === 'string') return obj.accessToken;
+    if (obj.access_token && typeof obj.access_token === 'string') return obj.access_token;
+
+    var keys = Object.keys(obj);
+    for (var i = 0; i < keys.length; i++) {
+      try {
+        var result = this._findTokenInObject(obj[keys[i]], depth + 1);
+        if (result) return result;
+      } catch (e) {}
+    }
+    return null;
+  };
+
+  App.prototype._checkExistingSession = function() {
+    var self = this;
+    
+    // Tentar acessar endpoint de usuário para verificar se já está logado
+    fetch('https://edusp-api.ip.tv/room/user', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'include'
+    }).then(function(resp) {
+      if (resp.ok) {
+        return resp.json().then(function(data) {
+          console.log('[Terminal] Sess\u00E3o existente encontrada:', data);
+          // Extrair token do Authorization header se possível
+          self.ui._appendToDashboard('\uD83D\uDD04 Sess\u00E3o existente detectada, tentando extrair token...', 'info');
+        });
+      }
+    }).catch(function(e) {
+      // Silencioso - não está logado
+    });
+  };
+
+  App.prototype._handleLoginData = function(data) {
+    if (state.token && state.token === (data.token || data.accessToken || data.access_token)) {
+      return; // Já está autenticado com este token
+    }
+
+    var token = data.token || data.accessToken || data.access_token;
+    if (!token) return;
+
+    var userData = {
+      nome: data.nome || data.userName || data.name || data.user_name || 'Usu\u00E1rio',
+      ra: data.ra || data.userId || data.user_id || data.ra || 'N/A',
+      token: token,
+      email: data.email || data.userEmail || data.user_email || '',
+      escola: data.escola || data.schoolName || data.school_name || '',
+      turma: data.turma || data.className || data.class_name || ''
+    };
+
+    // Salvar para referência futura
+    try {
+      localStorage.setItem('terminalUserData', JSON.stringify(userData));
+    } catch (e) {}
+
+    this.ui.updateUser(userData);
+  };
+
+  // ── Inicializar ──────────────────────────────────────────────────────────
+  try {
+    new App();
+    console.log('[Terminal] Inicializado com sucesso');
+  } catch (error) {
+    console.error('[Terminal] Erro ao inicializar:', error);
+    // Tentar criar UI mínima para mostrar erro
+    var errorDiv = document.createElement('div');
+    errorDiv.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#0a0a0a;color:#ff4444;font-family:monospace;padding:20px;display:flex;align-items:center;justify-content:center;';
+    errorDiv.textContent = 'Erro ao inicializar terminal: ' + error.message;
+    document.body.appendChild(errorDiv);
   }
-
-  // ── Boot ──────────────────────────────────────────────────────────────────
-
-  // Evitar múltiplas instâncias
-  if (!window.__terminalApp) {
-    window.__terminalApp = new App();
-  }
-
-  console.log('%c╔═══════════════════════════════════════════════════════════╗', 'color: #00d4ff');
-  console.log('%c║   TERMINAL — SALA DO FUTURO                            ║', 'color: #00d4ff');
-  console.log('%c║   Use terminalApp.manualLogin(ra, senha, token)       ║', 'color: #888888');
-  console.log('%c║   para login manual se necessário                      ║', 'color: #888888');
-  console.log('%c╚═══════════════════════════════════════════════════════════╝', 'color: #00d4ff');
 
 })();

@@ -1,802 +1,150 @@
-(function() {
-    // Verifica se já existe a janela
-    if (document.getElementById('edu-terminal-panel')) {
-        document.getElementById('edu-terminal-panel').remove();
-        return;
-    }
+(function(){
+    if(document.getElementById('edu-terminal')){document.getElementById('edu-terminal').remove();return;}
 
-    const API_CONFIG = {
-        url: 'https://gen.pollinations.ai/v1/chat/completions',
-        key: 'pk_bJav4nbMa2fZGkqG',
-        model: 'openai'
-    };
+    var API_AI='https://gen.pollinations.ai/v1/chat/completions';
+    var API_KEY='pk_bJav4nbMa2fZGkqG';
 
-    const Utils = {
-        formatDate: function(dateStr) {
-            if (!dateStr) return '';
-            var d = new Date(dateStr);
-            return d.toLocaleString('pt-BR');
-        },
-        
-        getToken: function() {
-            try {
-                var match = document.cookie.match(/token=([^;]+)/);
-                return match ? match[1] : localStorage.getItem('token') || '';
-            } catch(e) { return ''; }
-        },
-        
-        getCaptcha: function() {
-            try {
-                return localStorage.getItem('captcha') || '';
-            } catch(e) { return ''; }
-        }
-    };
+    function getToken(){try{var m=document.cookie.match(/token=([^;]+)/);return m?m[1]:localStorage.getItem('token')||'';}catch(e){return '';}}
+    function getCaptcha(){try{return localStorage.getItem('captcha')||'';}catch(e){return '';}}
 
-    // Funções de API
-    const TaskAPI = {
-        getTasks: function(token, captcha) {
-            var cookies = document.cookie;
-            var targets = [];
+    var css='#edu-terminal{position:fixed;top:20px;right:20px;width:420px;height:580px;background:#0d1117;border:1px solid #30363d;border-radius:12px;z-index:999999;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5)}#edu-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#161b22;border-bottom:1px solid #30363d;border-radius:12px 12px 0 0;cursor:move}#edu-header h3{margin:0;color:#58a6ff;font-size:14px}#edu-btns button{width:12px;height:12px;border-radius:50%;border:none;margin-left:6px;cursor:pointer}.btn-r{background:#f85149}.btn-m{background:#d29922}.btn-f{background:#3fb950}#edu-tabs{display:flex;background:#161b22;border-bottom:1px solid #30363d}#edu-tabs button{flex:1;padding:10px;background:transparent;border:none;color:#8b949e;cursor:pointer;font-size:13px;transition:all .2s}#edu-tabs button.active{color:#58a6ff;background:#21262d;border-bottom:2px solid #58a6ff}#edu-body{flex:1;overflow-y:auto;padding:16px;color:#c9d1d9;font-size:13px;line-height:1.6}#edu-body::-webkit-scrollbar{width:6px}#edu-body::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}.task-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:10px;cursor:pointer;transition:all .2s}.task-card:hover{border-color:#58a6ff;transform:translateX(4px)}.task-title{font-weight:600;color:#fff;margin-bottom:6px}.task-meta{font-size:11px;color:#8b949e}.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-right:6px}.badge-pend{color:#3fb950;background:rgba(63,185,80,.15)}.badge-exp{color:#f85149;background:rgba(248,81,73,.15)}.answers-box{margin-top:10px;padding:10px;background:#0d1117;border-radius:6px;border:1px solid #30363d;display:none}.answers-box.show{display:block}.ans-item{padding:8px;margin:4px 0;background:#161b22;border-radius:4px;border-left:2px solid #58a6ff;font-size:12px}#chat-area{height:340px;overflow-y:auto;margin-bottom:12px}#chat-area::-webkit-scrollbar{width:6px}#chat-area::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}.msg{margin-bottom:12px;display:flex}.msg.user{justify-content:flex-end}.msg.bot{justify-content:flex-start}.bubble{max-width:85%;padding:10px 14px;border-radius:12px;line-height:1.5;word-wrap:break-word}.msg.user .bubble{background:#238636;color:#fff;border-bottom-right-radius:4px}.msg.bot .bubble{background:#161b22;color:#c9d1d9;border-bottom-left-radius:4px;border:1px solid #30363d}.input-row{display:flex;gap:8px}#chat-input{flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;color:#fff;font-size:13px;outline:none}#chat-input:focus{border-color:#58a6ff}#send-btn{background:#238636;border:none;border-radius:8px;padding:10px 16px;color:#fff;font-weight:600;cursor:pointer;transition:all .2s}#send-btn:hover{background:#2ea043}.loading{text-align:center;padding:40px;color:#8b949e}.spinner{display:inline-block;width:20px;height:20px;border:2px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}#status-bar{padding:8px 16px;background:#161b22;border-top:1px solid #30363d;font-size:11px;color:#8b949e;display:flex;justify-content:space-between}.dot{width:6px;height:6px;border-radius:50%;background:#3fb950;display:inline-block;margin-right:4px}';
 
-            return fetch('https://edusp-api.ip.tv/room/user', {
-                headers: {
-                    'Authorization': 'Bearer ' + token,
-                    'X-Captcha': captcha,
-                    'Cookie': cookies
-                }
-            }).then(function(r) {
-                if (!r.ok) return { rooms: [] };
-                return r.json();
-            }).then(function(roomsData) {
-                var rooms = roomsData.rooms || [];
-                rooms.forEach(function(room) {
-                    if (room.name) targets.push(String(room.name));
-                    (room.group_categories || []).forEach(function(gc) {
-                        if (gc.id) targets.push(String(gc.id));
-                    });
-                });
+    var s=document.createElement('style');s.textContent=css;document.head.appendChild(s);
 
-                function fetchTasks(expired) {
-                    var url = 'https://edusp-api.ip.tv/tms/task/todo?expired_only=' + expired + '&limit=100&offset=0&filter_expired=' + (!expired) + '&is_exam=false&with_answer=true&is_essay=false&answer_statuses=draft&answer_statuses=pending&with_apply_moment=true';
-                    targets.forEach(function(t) { url += '&publication_target=' + encodeURIComponent(t); });
+    var d=document.createElement('div');d.id='edu-terminal';
+    d.innerHTML='<div id="edu-header"><h3>🎓 Edu Terminal</h3><div id="edu-btns"><button class="btn-f" onclick="eduRefresh()" title="Atualizar"></button><button class="btn-m" onclick="eduMinimize()" title="Minimizar"></button><button class="btn-r" onclick="eduClose()" title="Fechar"></button></div></div><div id="edu-tabs"><button class="active" onclick="eduTab(\'tasks\')">📋 Atividades</button><button onclick="eduTab(\'chat\')">🤖 Assistente</button></div><div id="edu-body"><div id="tab-tasks"><div class="loading"><div class="spinner"></div><p>Carregando...</p></div></div><div id="tab-chat" style="display:none"><div id="chat-area"><div class="msg bot"><div class="bubble">Olá! 👋 Sou seu assistente. Posso ver suas atividades e ajudar com dúvidas!</div></div></div><div class="input-row"><input type="text" id="chat-input" placeholder="Digite sua mensagem..." onkeypress="if(event.key==\'Enter\')eduSend()"><button id="send-btn" onclick="eduSend()">Enviar</button></div></div></div><div id="status-bar"><span><span class="dot"></span>Online</span><span id="edu-time">--:--</span></div>';
+    document.body.appendChild(d);
 
-                    return fetch(url, {
-                        headers: {
-                            'Authorization': 'Bearer ' + token,
-                            'X-Captcha': captcha,
-                            'Cookie': cookies
-                        }
-                    }).then(function(r) {
-                        if (!r.ok) return [];
-                        return r.json();
-                    }).then(function(d) {
-                        return Array.isArray(d) ? d : (d.results || d.tasks || []);
-                    }).catch(function() { return []; });
-                }
+    window.eduTasks={pend:[],exp:[]};
+    window.eduChat=[];
+    var min=false;
 
-                return Promise.all([fetchTasks(false), fetchTasks(true)]).then(function(results) {
-                    function formatTasks(tasks, tipo) {
-                        return tasks.map(function(t) {
-                            return {
-                                id: t.id,
-                                title: t.title || '#' + t.id,
-                                expire_at: Utils.formatDate(t.expire_at),
-                                publication_target: t.publication_target || '',
-                                tipo: tipo,
-                                is_essay: t.is_essay || false,
-                                description: t.description || '',
-                                questions: t.questions || []
-                            };
-                        });
-                    }
-                    return {
-                        pending: formatTasks(results[0], 'pendente'),
-                        expired: formatTasks(results[1], 'expirada')
-                    };
-                });
-            });
-        },
+    // Drag
+    (function(){var h=document.getElementById('edu-header'),el=d,p1=0,p2=0,p3=0,p4=0;h.onmousedown=function(e){e.preventDefault();p3=e.clientX;p4=e.clientY;document.onmouseup=function(){document.onmouseup=null;document.onmousemove=null};document.onmousemove=function(e){e.preventDefault();p1=p3-e.clientX;p2=p4-e.clientY;p3=e.clientX;p4=e.clientY;el.style.top=(el.offsetTop-p2)+'px';el.style.left=(el.offsetLeft-p1)+'px';el.style.right='auto'}}})();
 
-        getTaskAnswers: function(token, taskId, target) {
-            var url = 'https://edusp-api.ip.tv/tms/task/' + taskId + '/answers?room_code=' + encodeURIComponent(target);
-            return fetch(url, {
-                headers: {
-                    'Authorization': 'Bearer ' + token,
-                    'Cookie': document.cookie
-                }
-            }).then(function(r) {
-                if (!r.ok) throw new Error('Falha ao buscar respostas');
-                return r.json();
-            }).then(function(d) { return d.answers || d.results || d; });
-        }
-    };
+    window.eduClose=function(){d.remove()};
+    window.eduMinimize=function(){var b=document.getElementById('edu-body'),sb=document.getElementById('status-bar');if(min){b.style.display='block';sb.style.display='flex';min=false}else{b.style.display='none';sb.style.display='none';min=true}};
+    window.eduTab=function(t){document.querySelectorAll('#edu-tabs button').forEach(function(b){b.classList.remove('active')});event.target.classList.add('active');document.getElementById('tab-tasks').style.display=t==='tasks'?'block':'none';document.getElementById('tab-chat').style.display=t==='chat'?'block':'none'};
 
-    // Criar estilo CSS
-    var style = document.createElement('style');
-    style.textContent = `
-        #edu-terminal-panel {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            width: 450px;
-            max-height: 600px;
-            background: #1a1a2e;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-            font-family: 'Consolas', 'Monaco', monospace;
-            z-index: 999999;
-            overflow: hidden;
-            border: 1px solid #16213e;
-        }
-        
-        #edu-header {
-            background: linear-gradient(135deg, #0f3460 0%, #16213e 100%);
-            padding: 12px 16px;
-            cursor: move;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #0f3460;
-        }
-        
-        #edu-title {
-            color: #00fff5;
-            font-size: 14px;
-            font-weight: bold;
-            text-shadow: 0 0 10px rgba(0,255,245,0.5);
-        }
-        
-        #edu-controls {
-            display: flex;
-            gap: 8px;
-        }
-        
-        .edu-btn-control {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .edu-btn-close { background: #ff6b6b; }
-        .edu-btn-minimize { background: #ffd93d; }
-        .edu-btn-refresh { background: #6bcb77; }
-        
-        .edu-btn-control:hover { transform: scale(1.2); opacity: 0.8; }
-        
-        #edu-tabs {
-            display: flex;
-            background: #0f3460;
-            padding: 0;
-        }
-        
-        .edu-tab {
-            flex: 1;
-            padding: 12px;
-            background: transparent;
-            border: none;
-            color: #888;
-            cursor: pointer;
-            font-family: inherit;
-            font-size: 13px;
-            transition: all 0.3s;
-            border-bottom: 2px solid transparent;
-        }
-        
-        .edu-tab.active {
-            color: #00fff5;
-            background: rgba(0,255,245,0.1);
-            border-bottom-color: #00fff5;
-        }
-        
-        .edu-tab:hover:not(.active) {
-            color: #fff;
-            background: rgba(255,255,255,0.05);
-        }
-        
-        #edu-content {
-            height: 450px;
-            overflow-y: auto;
-            padding: 16px;
-            color: #e0e0e0;
-            font-size: 13px;
-            line-height: 1.6;
-        }
-        
-        #edu-content::-webkit-scrollbar {
-            width: 8px;
-        }
-        
-        #edu-content::-webkit-scrollbar-track {
-            background: #1a1a2e;
-        }
-        
-        #edu-content::-webkit-scrollbar-thumb {
-            background: #0f3460;
-            border-radius: 4px;
-        }
-        
-        .edu-task-item {
-            background: rgba(15,52,96,0.5);
-            padding: 12px;
-            margin-bottom: 10px;
-            border-radius: 8px;
-            border-left: 3px solid #00fff5;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .edu-task-item:hover {
-            background: rgba(15,52,96,0.8);
-            transform: translateX(5px);
-        }
-        
-        .edu-task-item.expired {
-            border-left-color: #ff6b6b;
-        }
-        
-        .edu-task-title {
-            color: #fff;
-            font-weight: bold;
-            margin-bottom: 6px;
-        }
-        
-        .edu-task-meta {
-            color: #888;
-            font-size: 11px;
-        }
-        
-        .edu-task-type {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 10px;
-            margin-right: 8px;
-        }
-        
-        .edu-task-type.pendente {
-            background: rgba(107,203,119,0.2);
-            color: #6bcb77;
-        }
-        
-        .edu-task-type.expirada {
-            background: rgba(255,107,107,0.2);
-            color: #ff6b6b;
-        }
-        
-        .edu-answers-container {
-            margin-top: 10px;
-            padding: 10px;
-            background: rgba(0,0,0,0.3);
-            border-radius: 6px;
-            display: none;
-        }
-        
-        .edu-answer-item {
-            padding: 8px;
-            margin: 5px 0;
-            background: rgba(0,255,245,0.05);
-            border-radius: 4px;
-            border-left: 2px solid #00fff5;
-        }
-        
-        /* Chat Styles */
-        #edu-chat-messages {
-            height: 320px;
-            overflow-y: auto;
-            margin-bottom: 12px;
-            padding-right: 8px;
-        }
-        
-        .edu-chat-msg {
-            margin-bottom: 12px;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .edu-chat-msg.user {
-            align-items: flex-end;
-        }
-        
-        .edu-chat-bubble {
-            max-width: 85%;
-            padding: 10px 14px;
-            border-radius: 12px;
-            word-wrap: break-word;
-            line-height: 1.5;
-        }
-        
-        .edu-chat-msg.user .edu-chat-bubble {
-            background: linear-gradient(135deg, #0f3460, #16213e);
-            color: #fff;
-            border-bottom-right-radius: 4px;
-        }
-        
-        .edu-chat-msg.assistant .edu-chat-bubble {
-            background: rgba(0,255,245,0.1);
-            color: #e0e0e0;
-            border-bottom-left-radius: 4px;
-            border: 1px solid rgba(0,255,245,0.2);
-        }
-        
-        .edu-chat-input-container {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        
-        #edu-chat-input {
-            flex: 1;
-            background: rgba(15,52,96,0.5);
-            border: 1px solid #0f3460;
-            border-radius: 8px;
-            padding: 10px 14px;
-            color: #fff;
-            font-family: inherit;
-            font-size: 13px;
-            outline: none;
-            transition: all 0.3s;
-        }
-        
-        #edu-chat-input:focus {
-            border-color: #00fff5;
-            box-shadow: 0 0 10px rgba(0,255,245,0.2);
-        }
-        
-        #edu-chat-send {
-            background: linear-gradient(135deg, #00fff5, #0f3460);
-            border: none;
-            border-radius: 8px;
-            padding: 10px 16px;
-            color: #000;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        #edu-chat-send:hover {
-            transform: scale(1.05);
-            box-shadow: 0 0 15px rgba(0,255,245,0.4);
-        }
-        
-        .edu-loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid rgba(0,255,245,0.3);
-            border-radius: 50%;
-            border-top-color: #00fff5;
-            animation: edu-spin 1s ease-in-out infinite;
-        }
-        
-        @keyframes edu-spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        .edu-status-bar {
-            padding: 8px 16px;
-            background: #0f3460;
-            font-size: 11px;
-            color: #888;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .edu-status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #6bcb77;
-            animation: edu-pulse 2s infinite;
-        }
-        
-        @keyframes edu-pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        
-        .edu-empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: #666;
-        }
-        
-        .edu-empty-icon {
-            font-size: 48px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-    `;
-    document.head.appendChild(style);
+    window.eduRefresh=function(){loadTasks()};
 
-    // Criar elemento principal
-    var panel = document.createElement('div');
-    panel.id = 'edu-terminal-panel';
-    panel.innerHTML = `
-        <div id="edu-header">
-            <span id="edu-title">🎓 Edu Terminal</span>
-            <div id="edu-controls">
-                <button class="edu-btn-control edu-btn-refresh" onclick="refreshTasks()" title="Atualizar"></button>
-                <button class="edu-btn-control edu-btn-minimize" onclick="minimizePanel()" title="Minimizar"></button>
-                <button class="edu-btn-control edu-btn-close" onclick="closePanel()" title="Fechar"></button>
-            </div>
-        </div>
-        <div id="edu-tabs">
-            <button class="edu-tab active" data-tab="atividade" onclick="switchTab('atividade')">📋 Atividade</button>
-            <button class="edu-tab" data-tab="assistente" onclick="switchTab('assistente')">🤖 Assistente</button>
-        </div>
-        <div id="edu-content">
-            <div id="tab-atividade" class="tab-content">
-                <div class="edu-loading-container" style="text-align:center;padding:40px;">
-                    <div class="edu-loading"></div>
-                    <p style="color:#888;margin-top:10px;">Carregando atividades...</p>
-                </div>
-            </div>
-            <div id="tab-assistente" class="tab-content" style="display:none;">
-                <div id="edu-chat-messages">
-                    <div class="edu-chat-msg assistant">
-                        <div class="edu-chat-bubble">
-                            Olá! 👋 Sou seu assistente educacional. Posso ajudar você com suas atividades, ver respostas ou tirar dúvidas. Como posso ajudar?
-                        </div>
-                    </div>
-                </div>
-                <div class="edu-chat-input-container">
-                    <input type="text" id="edu-chat-input" placeholder="Digite sua mensagem..." onkeypress="handleChatKeypress(event)">
-                    <button id="edu-chat-send" onclick="sendMessage()">Enviar</button>
-                </div>
-            </div>
-        </div>
-        <div class="edu-status-bar">
-            <span><span class="edu-status-dot"></span> Conectado</span>
-            <span id="edu-last-update">--:--:--</span>
-        </div>
-    `;
-    document.body.appendChild(panel);
+    async function loadTasks(){
+        var token=getToken(),cap=getCaptcha();
+        if(!token){document.getElementById('tab-tasks').innerHTML='<div class="loading"><p>⚠️ Token não encontrado</p><small>Faça login primeiro</small></div>';return;}
+        document.getElementById('tab-tasks').innerHTML='<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
 
-    // Variáveis globais
-    window.eduTasks = { pending: [], expired: [] };
-    window.eduChatHistory = [];
-    let isMinimized = false;
+        try{
+            var cookies=document.cookie;
+            var roomsRes=await fetch('https://edusp-api.ip.tv/room/user',{headers:{'Authorization':'Bearer '+token,'X-Captcha':cap,'Cookie':cookies}});
+            var roomsData=await roomsRes.json();
+            var targets=[];
+            (roomsData.rooms||[]).forEach(function(r){if(r.name)targets.push(String(r.name));(r.group_categories||[]).forEach(function(g){if(g.id)targets.push(String(g.id))})});
 
-    // Drag functionality
-    makeDraggable(panel);
+            async function getT(exp){
+                var u='https://edusp-api.ip.tv/tms/task/todo?expired_only='+exp+'&limit=100&offset=0&filter_expired='+(!exp)+'&is_exam=false&with_answer=true&is_essay=false&answer_statuses=draft&answer_statuses=pending&with_apply_moment=true';
+                targets.forEach(function(t){u+='&publication_target='+encodeURIComponent(t)});
+                var r=await fetch(u,{headers:{'Authorization':'Bearer '+token,'X-Captcha':cap,'Cookie':cookies}});
+                var d=await r.json();
+                return Array.isArray(d)?d:(d.results||d.tasks||[]);
+            }
 
-    function makeDraggable(element) {
-        var header = element.querySelector('#edu-header');
-        var pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-        
-        header.onmousedown = dragMouseDown;
-
-        function dragMouseDown(e) {
-            e.preventDefault();
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-            document.onmouseup = closeDragElement;
-            document.onmousemove = elementDrag;
-        }
-
-        function elementDrag(e) {
-            e.preventDefault();
-            pos1 = pos3 - e.clientX;
-            pos2 = pos4 - e.clientY;
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-            element.style.top = (element.offsetTop - pos2) + "px";
-            element.style.left = (element.offsetLeft - pos1) + "px";
-            element.style.right = "auto";
-        }
-
-        function closeDragElement() {
-            document.onmouseup = null;
-            document.onmousemove = null;
-        }
-    }
-
-    // Funções de controle
-    window.closePanel = function() {
-        panel.remove();
-    };
-
-    window.minimizePanel = function() {
-        var content = document.getElementById('edu-content');
-        var statusBar = document.querySelector('.edu-status-bar');
-        if (isMinimized) {
-            content.style.display = 'block';
-            statusBar.style.display = 'flex';
-            panel.style.maxHeight = '600px';
-            isMinimized = false;
-        } else {
-            content.style.display = 'none';
-            statusBar.style.display = 'none';
-            panel.style.maxHeight = 'auto';
-            isMinimized = true;
-        }
-    };
-
-    window.switchTab = function(tabName) {
-        document.querySelectorAll('.edu-tab').forEach(function(tab) {
-            tab.classList.remove('active');
-        });
-        document.querySelectorAll('.tab-content').forEach(function(content) {
-            content.style.display = 'none';
-        });
-        
-        document.querySelector('.edu-tab[data-tab="' + tabName + '"]').classList.add('active');
-        document.getElementById('tab-' + tabName).style.display = 'block';
-    };
-
-    // Carregar tarefas
-    window.refreshTasks = function() {
-        var token = Utils.getToken();
-        var captcha = Utils.getCaptcha();
-        
-        if (!token) {
-            showNoTokenMessage();
-            return;
-        }
-
-        var container = document.getElementById('tab-atividade');
-        container.innerHTML = '<div style="text-align:center;padding:40px;"><div class="edu-loading"></div><p style="color:#888;margin-top:10px;">Carregando...</p></div>';
-
-        TaskAPI.getTasks(token, captcha).then(function(data) {
-            window.eduTasks = data;
-            renderTasks(data);
-            updateLastUpdate();
+            var [pendData,expData]=await Promise.all([getT(false),getT(true)]);
             
-            // Auto-detectar mudanças na página
-            setupAutoRefresh();
-        }).catch(function(err) {
-            container.innerHTML = '<div class="edu-empty-state"><div class="edu-empty-icon">⚠️</div><p>Erro ao carregar atividades</p><small>' + err.message + '</small></div>';
-        });
+            window.eduTasks.pend=pendData.map(function(t){return{id:t.id,title:t.title||'#'+t.id,date:t.expire_at?new Date(t.expire_at).toLocaleString('pt-BR'):'',target:t.publication_target||'',desc:t.description||'',qs:t.questions||[]}});
+            window.eduTasks.exp=expData.map(function(t){return{id:t.id,title:t.title||'#'+t.id,date:t.expire_at?new Date(t.expire_at).toLocaleString('pt-BR'):'',target:t.publication_target||'',desc:t.description||'',qs:t.questions||[]}});
+
+            renderTasks();
+            document.getElementById('edu-time').textContent=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+        }catch(e){document.getElementById('tab-tasks').innerHTML='<div class="loading"><p>❌ Erro ao carregar</p><small>'+e.message+'</small></div>';}
+    }
+
+    function renderTasks(){
+        var h='';
+        if(window.eduTasks.pend.length===0&&window.eduTasks.exp.length===0){h='<div class="loading"><p>✅ Nenhuma atividade</p></div>'}
+        else{
+            if(window.eduTasks.pend.length>0){h+='<p style="color:#3fb950;margin-bottom:8px;">● Pendentes ('+window.eduTasks.pend.length+')</p>';window.eduTasks.pend.forEach(function(t){h+=taskCard(t,false)})}
+            if(window.eduTasks.exp.length>0){h+='<p style="color:#f85149;margin:16px 0 8px;">● Expiradas ('+window.eduTasks.exp.length+')</p>';window.eduTasks.exp.forEach(function(t){h+=taskCard(t,true)})}
+        }
+        document.getElementById('tab-tasks').innerHTML=h;
+    }
+
+    function taskCard(t,expired){
+        return '<div class="task-card" onclick="eduAnswers(\''+t.id+'\',\''+(t.target||'')+'\')"><div class="task-title">'+t.title+'</div><div class="task-meta"><span class="badge '+(expired?'badge-exp':'badge-pend')+'">'+(expired?'EXPIRADA':'PENDENTE')+'</span>📅 '+t.date+'</div><div class="answers-box" id="ans-'+t.id+'"></div></div>'
+    }
+
+    window.eduAnswers=function(id,target){
+        var box=document.getElementById('ans-'+id);
+        if(box.classList.contains('show')){box.classList.remove('show');box.innerHTML='';return}
+        box.classList.add('show');
+        box.innerHTML='<div class="loading"><div class="spinner"></div></div>';
+
+        fetch('https://edusp-api.ip.tv/tms/task/'+id+'/answers?room_code='+encodeURIComponent(target),{headers:{'Authorization':'Bearer '+getToken(),'Cookie':document.cookie}})
+        .then(function(r){return r.json()})
+        .then(function(d){
+            var ans=d.answers||d.results||d;
+            if(!ans||ans.length===0){box.innerHTML='<p style="color:#8b949e;text-align:center">Sem respostas</p>';return}
+            var h='';ans.forEach(function(a,i){h+='<div class="ans-item"><strong>Q'+(i+1)+': </strong>'+((typeof a==='object')?(a.answer_text||JSON.stringify(a)):a)+'</div>'});
+            box.innerHTML=h;
+        })
+        .catch(function(e){box.innerHTML='<p style="color:#f85149">Erro: '+e.message+'</p>'})
     };
 
-    function showNoTokenMessage() {
-        var container = document.getElementById('tab-atividade');
-        container.innerHTML = '<div class="edu-empty-state"><div class="edu-empty-icon">🔑</div><p>Token não encontrado</p><small>Faça login no sistema primeiro</small></div>';
-    }
+    // Chat
+    window.eduSend=async function(){
+        var input=document.getElementById('chat-input');
+        var msg=input.value.trim();
+        if(!msg)return;
 
-    function renderTasks(data) {
-        var container = document.getElementById('tab-atividade');
-        var html = '';
+        addMsg(msg,'user');
+        input.value='';
 
-        if (data.pending.length === 0 && data.expired.length === 0) {
-            html = '<div class="edu-empty-state"><div class="edu-empty-icon">✅</div><p>Nenhuma atividade encontrada</p><small>Você está em dia!</small></div>';
-        } else {
-            if (data.pending.length > 0) {
-                html += '<h3 style="color:#6bcb77;margin-bottom:10px;">📌 Pendentes (' + data.pending.length + ')</h3>';
-                data.pending.forEach(function(task) {
-                    html += createTaskHTML(task);
-                });
-            }
+        var typing=document.createElement('div');
+        typing.className='msg bot';
+        typing.id='typing';
+        typing.innerHTML='<div class="bubble"><div class="spinner" style="display:inline-block;vertical-align:middle;margin-right:8px"></div>Digitando...</div>';
+        document.getElementById('chat-area').appendChild(typing);
+        scrollChat();
 
-            if (data.expired.length > 0) {
-                html += '<h3 style="color:#ff6b6b;margin:20px 0 10px;">⏰ Expiradas (' + data.expired.length + ')</h3>';
-                data.expired.forEach(function(task) {
-                    html += createTaskHTML(task);
-                });
-            }
-        }
+        try{
+            var ctx='Tarefas:\nPENDENTES:\n'+window.eduTasks.pend.map(function(t){return '- ['+t.id+'] '+t.title}).join('\n')+'\n\nEXPIRADAS:\n'+window.eduTasks.exp.map(function(t){return '- ['+t.id+'] '+t.title}).join('\n');
 
-        container.innerHTML = html;
-    }
-
-    function createTaskHTML(task) {
-        var expiredClass = task.tipo === 'expirada' ? 'expired' : '';
-        return '<div class="edu-task-item ' + expiredClass + '" onclick="toggleAnswers(\'' + task.id + '\', \'' + (task.publication_target || '') + '\')">' +
-            '<div class="edu-task-title">' + task.title + '</div>' +
-            '<div class="edu-task-meta">' +
-                '<span class="edu-task-type ' + task.tipo + '">' + task.tipo.toUpperCase() + '</span>' +
-                '<span>📅 ' + task.expire_at + '</span>' +
-            '</div>' +
-            '<div class="edu-answers-container" id="answers-' + task.id + '">' +
-                '<div style="text-align:center;"><div class="edu-loading"></div></div>' +
-            '</div>' +
-        '</div>';
-    }
-
-    window.toggleAnswers = function(taskId, target) {
-        var answersContainer = document.getElementById('answers-' + taskId);
-        
-        if (answersContainer.style.display === 'block') {
-            answersContainer.style.display = 'none';
-            return;
-        }
-
-        answersContainer.style.display = 'block';
-        answersContainer.innerHTML = '<div style="text-align:center;padding:10px;"><div class="edu-loading"></div><p style="color:#888;">Carregando respostas...</p></div>';
-
-        var token = Utils.getToken();
-        TaskAPI.getTaskAnswers(token, taskId, target).then(function(answers) {
-            if (!answers || answers.length === 0) {
-                answersContainer.innerHTML = '<p style="color:#888;text-align:center;">Nenhuma resposta encontrada</p>';
-                return;
-            }
-
-            var html = '<h4 style="color:#00fff5;margin-bottom:10px;">💡 Respostas:</h4>';
-            answers.forEach(function(answer, idx) {
-                html += '<div class="edu-answer-item">';
-                html += '<strong>Questão ' + (idx + 1) + ':</strong> ';
-                
-                if (typeof answer === 'object' && answer.answer_text) {
-                    html += answer.answer_text;
-                } else if (typeof answer === 'string') {
-                    html += answer;
-                } else {
-                    html += JSON.stringify(answer);
-                }
-                
-                html += '</div>';
+            var res=await fetch(API_AI,{
+                method:'POST',
+                headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},
+                body:JSON.stringify({
+                    model:'openai',
+                    messages:[
+                        {role:'system',content:'Você é assistente educacional. Use estas tarefas para ajudar:\n'+ctx+'\nResponda em pt-BR, seja útil e conciso.'},
+                        ...window.eduChat.slice(-8),
+                        {role:'user',content:msg}
+                    ],
+                    temperature:0.7,
+                    max_tokens:1500
+                })
             });
-            
-            answersContainer.innerHTML = html;
-        }).catch(function(err) {
-            answersContainer.innerHTML = '<p style="color:#ff6b6b;text-align:center;">Erro: ' + err.message + '</p>';
-        });
+
+            var data=await res.json();
+            var reply=data.choices[0].message.content;
+            addMsg(reply,'bot');
+            window.eduChat.push({role:'user',content:msg},{role:'assistant',content:reply});
+        }catch(e){addMsg('Erro: '+e.message,'bot')}
+        
+        var t=document.getElementById('typing');if(t)t.remove();
     };
 
-    function updateLastUpdate() {
-        var now = new Date();
-        document.getElementById('edu-last-update').textContent = now.toLocaleTimeString('pt-BR');
+    function addMsg(text,role){
+        var div=document.createElement('div');
+        div.className='msg '+role;
+        div.innerHTML='<div class="bubble">'+text.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>')+'</div>';
+        document.getElementById('chat-area').appendChild(div);
+        scrollChat();
     }
+    
+    function scrollChat(){var a=document.getElementById('chat-area');a.scrollTop=a.scrollHeight}
 
-    // Chat functions
-    window.handleChatKeypress = function(event) {
-        if (event.key === 'Enter') {
-            sendMessage();
-        }
-    };
+    // Auto refresh
+    var lastURL=location.href;
+    setInterval(function(){if(location.href!==lastURL){lastURL=location.href;loadTasks()}},5000);
 
-    window.sendMessage = async function() {
-        var input = document.getElementById('edu-chat-input');
-        var message = input.value.trim();
-        
-        if (!message) return;
-
-        addChatMessage(message, 'user');
-        input.value = '';
-
-        // Mostrar loading
-        showTypingIndicator();
-
-        try {
-            // Preparar contexto das tarefas para a IA
-            var tasksContext = prepareTasksContext();
-            
-            var response = await callAI(message, tasksContext);
-            removeTypingIndicator();
-            addChatMessage(response, 'assistant');
-        } catch (error) {
-            removeTypingIndicator();
-            addChatMessage('Desculpe, ocorreu um erro ao processar sua mensagem. Tente novamente.', 'assistant');
-        }
-    };
-
-    function addChatMessage(content, role) {
-        var messagesContainer = document.getElementById('edu-chat-messages');
-        var msgDiv = document.createElement('div');
-        msgDiv.className = 'edu-chat-msg ' + role;
-        msgDiv.innerHTML = '<div class="edu-chat-bubble">' + formatMessage(content) + '</div>';
-        messagesContainer.appendChild(msgDiv);
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        
-        window.eduChatHistory.push({ role: role, content: content });
-    }
-
-    function formatMessage(content) {
-        // Formatar markdown básico
-        return content
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\n/g, '<br>');
-    }
-
-    function showTypingIndicator() {
-        var messagesContainer = document.getElementById('edu-chat-messages');
-        var typingDiv = document.createElement('div');
-        typingDiv.id = 'typing-indicator';
-        typingDiv.className = 'edu-chat-msg assistant';
-        typingDiv.innerHTML = '<div class="edu-chat-bubble"><div class="edu-loading"></div> <span style="color:#888">Digitando...</span></div>';
-        messagesContainer.appendChild(typingDiv);
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
-
-    function removeTypingIndicator() {
-        var indicator = document.getElementById('typing-indicator');
-        if (indicator) indicator.remove();
-    }
-
-    function prepareTasksContext() {
-        var context = 'Tarefas atuais do usuário:\n\n';
-        
-        if (window.eduTasks.pending && window.eduTasks.pending.length > 0) {
-            context += 'PENDENTES:\n';
-            window.eduTasks.pending.forEach(function(t) {
-                context += '- ID: ' + t.id + ' | ' + t.title + ' | Vence: ' + t.expire_at + '\n';
-            });
-            context += '\n';
-        }
-        
-        if (window.eduTasks.expired && window.eduTasks.expired.length > 0) {
-            context += 'EXPIRADAS:\n';
-            window.eduTasks.expired.forEach(function(t) {
-                context += '- ID: ' + t.id + ' | ' + t.title + ' | Venceu em: ' + t.expire_at + '\n';
-            });
-        }
-        
-        return context;
-    }
-
-    async function callAI(userMessage, tasksContext) {
-        var systemPrompt = `Você é um assistente educacional especializado. Você tem acesso às informações de tarefas do usuário.
-
- ${tasksContext}
-
-Instruções:
-- Ajude o usuário com suas atividades acadêmicas
-- Quando perguntado sobre tarefas, use as informações disponíveis acima
-- Seja claro e objetivo nas respostas
-- Use português brasileiro
-- Você pode sugerir estratégias de estudo ou ajudar a organizar as tarefas`;
-
-        var messages = [
-            { role: 'system', content: systemPrompt },
-            ...window.eduChatHistory.slice(-10).map(m => ({ role: m.role, content: m.content })),
-            { role: 'user', content: userMessage }
-        ];
-
-        var response = await fetch(API_CONFIG.url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + API_CONFIG.key
-            },
-            body: JSON.stringify({
-                model: API_CONFIG.model,
-                messages: messages,
-                temperature: 0.7,
-                max_tokens: 2000
-            })
-        });
-
-        if (!response.ok) throw new Error('Erro na API');
-
-        var data = await response.json();
-        return data.choices[0].message.content;
-    }
-
-    // Auto-refresh quando detectar mudança de página/atividade
-    function setupAutoRefresh() {
-        var lastUrl = location.href;
-        
-        setInterval(function() {
-            if (location.href !== lastUrl) {
-                lastUrl = location.href;
-                refreshTasks();
-            }
-        }, 3000);
-
-        // Observer para mudanças no DOM que possam indicar nova atividade
-        var observer = new MutationObserver(function(mutations) {
-            var shouldRefresh = mutations.some(function(mutation) {
-                return mutation.addedNodes.length > 0 && 
-                       mutation.target.classList && 
-                       (mutation.target.classList.contains('task') || 
-                        mutation.target.classList.contains('activity') ||
-                        mutation.target.classList.contains('question'));
-            });
-            
-            if (shouldRefresh) {
-                clearTimeout(window.eduRefreshTimeout);
-                window.eduRefreshTimeout = setTimeout(refreshTasks, 1500);
-            }
-        });
-
-        observer.observe(document.body, { childList: true, subtree: true });
-    }
-
-    // Inicialização
-    setTimeout(refreshTasks, 500);
-
+    loadTasks();
 })();

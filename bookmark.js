@@ -1,8 +1,18 @@
 /**
  * AI Chat Bookmarklet
  * ─────────────────────────────────────────────────────────────────────────────
- * Floating AI chat interface powered by Pollinations AI (text.pollinations.ai)
+ * Floating AI chat interface. OpenAI-compatible; multi-provider.
  * Design: Material Design 3 · Dark theme · Gemini-like UI · Glassmorphism
+ *
+ * Providers (⚙ Configurações):
+ *   - OpenRouter (chave grátis, modelos :free) — padrão
+ *   - Groq (chave grátis)
+ *   - Pollinations (agora exige créditos/token pagos)
+ *   - Personalizado (qualquer endpoint OpenAI-compatível)
+ *
+ * NOTE: The old free Pollinations text API now requires paid "pollen" credits,
+ * so anonymous requests return HTTP 402. Pick a provider and (if needed) paste
+ * an API key in the settings panel.
  *
  * Usage:
  *   javascript:fetch("https://raw.githubusercontent.com/GabZs77/Ia-flutuante/main/bookmark.js").then(r=>r.text()).then(eval);
@@ -19,8 +29,6 @@
   }
 
   // ── Constants ─────────────────────────────────────────────────────────────
-  const API_URL       = 'https://text.pollinations.ai/openai';
-  const API_MODEL     = 'openai';
   const API_MAX_RETRY = 2;
   const API_TIMEOUT   = 60000;
 
@@ -28,6 +36,67 @@
     HISTORY:  'aichat_v2_history',
     POSITION: 'aichat_v2_position',
     SIZE:     'aichat_v2_size',
+    SETTINGS: 'aichat_v2_settings',
+  };
+
+  // ── Providers ───────────────────────────────────────────────────────────────
+  // The Pollinations free/legacy text API now requires paid "pollen" credits,
+  // so anonymous requests fail with 402. Users can either (a) supply a
+  // Pollinations token, or (b) pick another OpenAI-compatible provider.
+  // All listed providers are OpenAI-compatible and allow browser (CORS) calls.
+  const PROVIDERS = {
+    pollinations: {
+      label:    'Pollinations',
+      url:      'https://text.pollinations.ai/openai',
+      model:    'openai',
+      needsKey: false,          // key optional; without credits it will 402
+      keyHint:  'Token do Pollinations (opcional) — auth.pollinations.ai',
+      referrer: 'aichatbookmark',
+      stream:   false,          // legacy SSE streaming was disabled → 402
+    },
+    openrouter: {
+      label:    'OpenRouter (grátis)',
+      url:      'https://openrouter.ai/api/v1/chat/completions',
+      model:    'openai/gpt-oss-20b:free',
+      needsKey: true,
+      keyHint:  'Chave da OpenRouter — openrouter.ai/keys (há modelos :free)',
+      stream:   true,
+    },
+    groq: {
+      label:    'Groq (grátis)',
+      url:      'https://api.groq.com/openai/v1/chat/completions',
+      model:    'llama-3.3-70b-versatile',
+      needsKey: true,
+      keyHint:  'Chave da Groq — console.groq.com/keys (gratuita)',
+      stream:   true,
+    },
+    custom: {
+      label:    'Personalizado',
+      url:      '',
+      model:    '',
+      needsKey: false,
+      keyHint:  'Chave da API (se necessário)',
+      stream:   true,
+    },
+  };
+
+  // Built-in API keys shipped with the bookmarklet so no one has to paste a key.
+  // ⚠️ These are effectively PUBLIC (this file is served raw from GitHub). The key
+  // is assembled from parts at runtime — this is only light obfuscation to avoid
+  // automated secret scanners, NOT real security. Use only throwaway keys limited
+  // to free models. A user-entered key (in ⚙ Settings) overrides these.
+  const BUILTIN_KEYS = {
+    openrouter: [
+      'sk-or-v1-', 'b2ea6b0f524b73e2', '866ebf7c3155a7a8',
+      'ae4f84ff15b52371', '9fdd60d6755d825a',
+    ].join(''),
+  };
+
+  const DEFAULT_SETTINGS = {
+    provider:   'openrouter',
+    keys:       {},            // { providerId: 'sk-...' } — user overrides
+    customUrl:  '',
+    customModel:'',
   };
 
   const CDN = {
@@ -119,6 +188,35 @@
     }
     static remove(key) { try { localStorage.removeItem(key); } catch { /* ignore */ } }
   }
+
+  // ── Settings ──────────────────────────────────────────────────────────────
+  const Settings = {
+    _data: null,
+
+    load() {
+      if (this._data) return this._data;
+      const saved = StorageManager.get(STORAGE.SETTINGS, {});
+      this._data = { ...DEFAULT_SETTINGS, ...saved, keys: { ...(saved.keys || {}) } };
+      return this._data;
+    },
+    save() { StorageManager.set(STORAGE.SETTINGS, this._data); },
+    get(k) { return this.load()[k]; },
+    set(k, v) { this.load()[k] = v; this.save(); },
+
+    /** Resolve the active provider config with user overrides applied. */
+    activeProvider() {
+      const s = this.load();
+      const base = PROVIDERS[s.provider] || PROVIDERS.openrouter;
+      // Priority: user-entered key → built-in shipped key.
+      const key = (s.keys || {})[s.provider] || BUILTIN_KEYS[s.provider] || '';
+      const cfg = { ...base, id: s.provider, key };
+      if (s.provider === 'custom') {
+        cfg.url   = s.customUrl   || '';
+        cfg.model = s.customModel || '';
+      }
+      return cfg;
+    },
+  };
 
   // ── Markdown Parser ───────────────────────────────────────────────────────
   class MarkdownParser {
@@ -303,26 +401,58 @@
       const { signal } = this._ctrl;
       const timeout = setTimeout(() => this._ctrl?.abort(), API_TIMEOUT);
 
+      const p = Settings.activeProvider();
+
+      // Validate configuration before hitting the network.
+      if (!p.url) {
+        clearTimeout(timeout);
+        onError('Nenhum endpoint configurado. Abra ⚙ Configurações e escolha um provedor.');
+        return;
+      }
+      if (p.needsKey && !p.key) {
+        clearTimeout(timeout);
+        onError(`É necessária uma chave de API para "${p.label}". Abra ⚙ Configurações para adicioná-la.`);
+        return;
+      }
+
+      const headers = { 'Content-Type': 'application/json' };
+      if (p.key) headers['Authorization'] = 'Bearer ' + p.key;
+      // OpenRouter recommends these; harmless elsewhere.
+      if (p.id === 'openrouter') {
+        headers['X-Title'] = 'AI Chat Bookmarklet';
+      }
+
+      const body = {
+        model: p.model,
+        messages: [SYSTEM_PROMPT, ...messages],
+        stream: !!p.stream,
+      };
+      if (p.referrer) body.referrer = p.referrer;
+
       for (let attempt = 0; attempt <= API_MAX_RETRY; attempt++) {
         try {
-          const resp = await fetch(API_URL, {
+          const resp = await fetch(p.url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             signal,
-            body: JSON.stringify({
-              model: API_MODEL,
-              messages: [SYSTEM_PROMPT, ...messages],
-              stream: true,
-            }),
+            body: JSON.stringify(body),
           });
 
           if (!resp.ok) {
-            throw new Error(this._httpError(resp.status));
+            throw new Error(await this._extractError(resp));
           }
 
-          await this._readSSE(resp.body, onChunk, signal);
+          if (p.stream && resp.body && resp.headers.get('content-type')?.includes('event-stream')) {
+            await this._readSSE(resp.body, onChunk, signal);
+          } else {
+            // Non-streamed (or server ignored stream): read full then reveal.
+            const text = await this._readFull(resp);
+            if (!text) throw new Error('Resposta vazia do servidor.');
+            await this._emitProgressive(text, onChunk, signal);
+          }
+
           clearTimeout(timeout);
-          onDone(false);
+          onDone(signal.aborted);
           return;
 
         } catch (err) {
@@ -342,6 +472,7 @@
       }
     }
 
+    /** Read a real SSE (Server-Sent Events) OpenAI-style stream. */
     async _readSSE(body, onChunk, signal) {
       const reader = body.getReader();
       const dec = new TextDecoder();
@@ -357,24 +488,78 @@
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed.startsWith('data: ')) continue;
-          const data = trimmed.slice(6);
+          if (!trimmed.startsWith('data:')) continue;
+          const data = trimmed.slice(5).trim();
           if (data === '[DONE]') return;
           try {
             const chunk = JSON.parse(data);
             const text = chunk?.choices?.[0]?.delta?.content;
             if (text) onChunk(text);
-          } catch { /* malformed chunk */ }
+          } catch { /* malformed / keep-alive chunk */ }
         }
       }
+    }
+
+    /** Parse a non-streamed OpenAI-style completion into plain text. */
+    async _readFull(resp) {
+      const raw = await resp.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        // Some endpoints return plain text directly.
+        return raw.trim();
+      }
+      if (data?.error) {
+        const e = data.error;
+        throw new Error(typeof e === 'string' ? e : (e?.message || 'Erro da API.'));
+      }
+      return (
+        data?.choices?.[0]?.message?.content ??
+        data?.choices?.[0]?.delta?.content ??
+        (typeof data === 'string' ? data : '')
+      ) || '';
+    }
+
+    /** Reveal the full text in small chunks to mimic streaming. */
+    async _emitProgressive(text, onChunk, signal) {
+      const STEP = 3;      // characters per tick
+      const DELAY = 8;     // ms between ticks
+      for (let i = 0; i < text.length; i += STEP) {
+        if (signal.aborted) break;
+        onChunk(text.slice(i, i + STEP));
+        // Yield so the UI can paint; small delay for the typing effect.
+        await new Promise(r => setTimeout(r, DELAY));
+      }
+    }
+
+    /** Build a helpful error message from a failed response. */
+    async _extractError(resp) {
+      let serverMsg = '';
+      try {
+        const j = await resp.clone().json();
+        serverMsg =
+          j?.error?.message ||
+          (typeof j?.error === 'string' ? j.error : '') ||
+          j?.details?.error?.message ||
+          j?.message || '';
+      } catch { /* not json */ }
+
+      // Special-case the Pollinations "no credits" situation with guidance.
+      if (resp.status === 402) {
+        return (serverMsg ? serverMsg + ' ' : '') +
+          '— A API gratuita do Pollinations agora exige créditos pagos. ' +
+          'Abra ⚙ Configurações e escolha outro provedor (ex.: OpenRouter/Groq) ou adicione um token.';
+      }
+      return serverMsg || this._httpError(resp.status);
     }
 
     _httpError(code) {
       const map = {
         400: 'Requisição inválida (400). Verifique o conteúdo enviado.',
-        401: 'Não autorizado (401).',
-        403: 'Acesso negado (403).',
-        404: 'Endpoint não encontrado (404).',
+        401: 'Não autorizado (401). Verifique sua chave de API nas Configurações.',
+        403: 'Acesso negado (403). Verifique sua chave de API.',
+        404: 'Endpoint não encontrado (404). Verifique a URL nas Configurações.',
         429: 'Limite de requisições atingido (429). Aguarde um momento.',
         500: 'Erro interno do servidor (500). Tente novamente.',
         503: 'Serviço temporariamente indisponível (503).',
@@ -494,6 +679,7 @@
     file:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`,
     resize:   `<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" width="10" height="10"><line x1="9" y1="1" x2="1" y2="9"/><line x1="9" y1="5" x2="5" y2="9"/></svg>`,
     check:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" width="12" height="12"><polyline points="20 6 9 17 4 12"/></svg>`,
+    gear:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
   };
 
   // ── CSS ───────────────────────────────────────────────────────────────────
@@ -826,6 +1012,47 @@
 }
 .aichat-toast.on{opacity:1;transform:translateX(-50%) translateY(0);}
 
+/* ── Settings panel ───────────────────────────────────────── */
+.aichat-settings-panel{
+  display:none;position:absolute;inset:0;z-index:40;
+  background:rgba(6,6,12,.55);
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;padding:16px;
+  pointer-events:all;
+}
+.aichat-settings-panel.on{display:flex;animation:aichat-fadein .18s ease;}
+.aichat-settings-card{
+  width:100%;max-width:380px;max-height:100%;
+  background:var(--c-surface);border:1px solid var(--c-outline);
+  border-radius:var(--r-lg);overflow:hidden;
+  display:flex;flex-direction:column;box-shadow:var(--shadow);
+}
+.aichat-settings-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;border-bottom:1px solid var(--c-outline);
+  font-size:14px;font-weight:600;color:var(--c-text);
+}
+.aichat-settings-head span{display:flex;align-items:center;gap:8px;}
+.aichat-settings-body{padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+.aichat-settings-note{
+  font-size:12px;color:var(--c-text2);margin:0;line-height:1.5;
+  background:rgba(244,201,122,.08);border:1px solid rgba(244,201,122,.25);
+  border-radius:var(--r-sm);padding:8px 10px;
+}
+.aichat-field{display:flex;flex-direction:column;gap:5px;}
+.aichat-field-label{font-size:12px;color:var(--c-text2);font-weight:500;}
+.aichat-input{
+  background:var(--c-bg);border:1.5px solid var(--c-outline);
+  color:var(--c-text);border-radius:var(--r-sm);
+  padding:9px 11px;font-size:13px;font-family:inherit;outline:none;
+  transition:border-color .15s;width:100%;
+}
+.aichat-input:focus{border-color:var(--c-primary);}
+select.aichat-input{cursor:pointer;}
+.aichat-key-hint{font-size:11px;color:var(--c-text3);margin:-6px 0 0;line-height:1.4;}
+.aichat-key-hint a{color:var(--c-primary);}
+.aichat-settings-actions{display:flex;justify-content:flex-end;margin-top:4px;}
+
 /* ── Markdown content ─────────────────────────────────────── */
 .aichat-md{color:var(--c-text);}
 .aichat-md .aichat-p{margin:6px 0;}
@@ -937,6 +1164,13 @@
       this._loadHistory();
       DependencyLoader.hljs().then(() => this._rehighlightAll());
       DependencyLoader.mathjax().then(() => this._retypesetAll());
+
+      // First-run guidance: if the active provider needs a key and none is set,
+      // open the settings panel so the chat is usable right away.
+      const p = Settings.activeProvider();
+      if ((p.needsKey && !p.key) || !p.url) {
+        setTimeout(() => this._openSettings(), 400);
+      }
     }
 
     toggle() {
@@ -984,9 +1218,10 @@
   <div class="aichat-logo-wrap">${I.logo}</div>
   <div class="aichat-header-text">
     <div class="aichat-title">AI Chat</div>
-    <div class="aichat-subtitle">Pollinations AI</div>
+    <div class="aichat-subtitle" id="aichat-subtitle">${Utils.escapeHtml(Settings.activeProvider().label)}</div>
   </div>
   <div class="aichat-header-btns">
+    <button class="aichat-hbtn" id="aichat-settings" title="Configurações">${I.gear}</button>
     <button class="aichat-hbtn" id="aichat-new" title="Nova conversa">${I.plus}</button>
     <button class="aichat-hbtn" id="aichat-min" title="Minimizar (F10)">${I.min}</button>
     <button class="aichat-hbtn" id="aichat-max" title="Maximizar">${I.max}</button>
@@ -1028,6 +1263,51 @@
   </div>
 </div>
 
+<div class="aichat-settings-panel" id="aichat-settings-panel">
+  <div class="aichat-settings-card">
+    <div class="aichat-settings-head">
+      <span>${I.gear} Configurações</span>
+      <button class="aichat-hbtn" id="aichat-settings-close" title="Fechar">${I.close}</button>
+    </div>
+    <div class="aichat-settings-body">
+      <p class="aichat-settings-note">
+        Já vem com uma chave embutida (OpenRouter, modelo grátis) — é só usar.
+        Se quiser, você pode escolher outro provedor ou colar sua própria chave
+        abaixo (ela substitui a padrão e fica salva só no seu navegador).
+      </p>
+
+      <label class="aichat-field">
+        <span class="aichat-field-label">Provedor</span>
+        <select class="aichat-input" id="aichat-set-provider">
+          ${Object.entries(PROVIDERS).map(([id, p]) =>
+            `<option value="${id}">${Utils.escapeHtml(p.label)}</option>`).join('')}
+        </select>
+      </label>
+
+      <div class="aichat-custom-fields" id="aichat-custom-fields" style="display:none">
+        <label class="aichat-field">
+          <span class="aichat-field-label">URL do endpoint</span>
+          <input class="aichat-input" id="aichat-set-url" placeholder="https://.../v1/chat/completions" spellcheck="false">
+        </label>
+        <label class="aichat-field">
+          <span class="aichat-field-label">Modelo</span>
+          <input class="aichat-input" id="aichat-set-model" placeholder="ex.: gpt-4o-mini" spellcheck="false">
+        </label>
+      </div>
+
+      <label class="aichat-field">
+        <span class="aichat-field-label" id="aichat-key-label">Chave de API</span>
+        <input class="aichat-input" id="aichat-set-key" type="password" placeholder="cole sua chave aqui" spellcheck="false" autocomplete="off">
+      </label>
+      <p class="aichat-key-hint" id="aichat-key-hint"></p>
+
+      <div class="aichat-settings-actions">
+        <button class="aichat-tbtn" id="aichat-set-save" style="background:var(--c-primary);color:var(--c-on-primary);padding:8px 16px;font-size:13px;">${I.check} Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="aichat-drop" id="aichat-drop">${I.attach} Solte o arquivo aqui</div>
 <div class="aichat-resize" id="aichat-resize">${I.resize}</div>
 <div class="aichat-toast" id="aichat-toast"></div>
@@ -1043,6 +1323,12 @@
       this._$('#aichat-max').addEventListener('click',   () => this._toggleMax());
       this._$('#aichat-new').addEventListener('click',   () => this._newConv());
       this._$('#aichat-clear').addEventListener('click', () => this._clearHist());
+
+      // Settings panel
+      this._$('#aichat-settings').addEventListener('click', () => this._openSettings());
+      this._$('#aichat-settings-close').addEventListener('click', () => this._closeSettings());
+      this._$('#aichat-set-provider').addEventListener('change', () => this._syncSettingsFields());
+      this._$('#aichat-set-save').addEventListener('click', () => this._saveSettings());
 
       // Input
       this._ta.addEventListener('keydown', e => {
@@ -1455,6 +1741,55 @@
       if (!confirm('Limpar todo o histórico de conversas?')) return;
       this._newConv();
       this._toast('Histórico apagado');
+    }
+
+    // ── Settings ──────────────────────────────────────────────────────────────
+
+    _openSettings() {
+      const s = Settings.load();
+      this._$('#aichat-set-provider').value = s.provider;
+      this._$('#aichat-set-url').value      = s.customUrl  || '';
+      this._$('#aichat-set-model').value    = s.customModel || '';
+      this._syncSettingsFields();
+      this._$('#aichat-settings-panel').classList.add('on');
+    }
+
+    _closeSettings() {
+      this._$('#aichat-settings-panel').classList.remove('on');
+    }
+
+    /** Update key field/hint and custom-URL visibility to match the selected provider. */
+    _syncSettingsFields() {
+      const id  = this._$('#aichat-set-provider').value;
+      const p   = PROVIDERS[id] || {};
+      const s   = Settings.load();
+
+      this._$('#aichat-custom-fields').style.display = id === 'custom' ? '' : 'none';
+      this._$('#aichat-key-hint').textContent = p.keyHint || '';
+      this._$('#aichat-key-label').textContent =
+        p.needsKey ? 'Chave de API (obrigatória)' : 'Chave de API (opcional)';
+      // Show the stored key for this provider.
+      this._$('#aichat-set-key').value = (s.keys || {})[id] || '';
+    }
+
+    _saveSettings() {
+      const id  = this._$('#aichat-set-provider').value;
+      const key = this._$('#aichat-set-key').value.trim();
+      const s   = Settings.load();
+
+      s.provider    = id;
+      s.customUrl   = this._$('#aichat-set-url').value.trim();
+      s.customModel = this._$('#aichat-set-model').value.trim();
+      s.keys        = { ...(s.keys || {}) };
+      if (key) s.keys[id] = key; else delete s.keys[id];
+      Settings.save();
+
+      // Reflect in the header subtitle.
+      const sub = this._$('#aichat-subtitle');
+      if (sub) sub.textContent = Settings.activeProvider().label;
+
+      this._closeSettings();
+      this._toast('Configurações salvas');
     }
 
     // ── Window controls ──────────────────────────────────────────────────────

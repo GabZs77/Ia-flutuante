@@ -1,150 +1,303 @@
-(function(){
-    if(document.getElementById('edu-terminal')){document.getElementById('edu-terminal').remove();return;}
-
-    var API_AI='https://gen.pollinations.ai/v1/chat/completions';
-    var API_KEY='pk_bJav4nbMa2fZGkqG';
-
-    function getToken(){try{var m=document.cookie.match(/token=([^;]+)/);return m?m[1]:localStorage.getItem('token')||'';}catch(e){return '';}}
-    function getCaptcha(){try{return localStorage.getItem('captcha')||'';}catch(e){return '';}}
-
-    var css='#edu-terminal{position:fixed;top:20px;right:20px;width:420px;height:580px;background:#0d1117;border:1px solid #30363d;border-radius:12px;z-index:999999;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5)}#edu-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#161b22;border-bottom:1px solid #30363d;border-radius:12px 12px 0 0;cursor:move}#edu-header h3{margin:0;color:#58a6ff;font-size:14px}#edu-btns button{width:12px;height:12px;border-radius:50%;border:none;margin-left:6px;cursor:pointer}.btn-r{background:#f85149}.btn-m{background:#d29922}.btn-f{background:#3fb950}#edu-tabs{display:flex;background:#161b22;border-bottom:1px solid #30363d}#edu-tabs button{flex:1;padding:10px;background:transparent;border:none;color:#8b949e;cursor:pointer;font-size:13px;transition:all .2s}#edu-tabs button.active{color:#58a6ff;background:#21262d;border-bottom:2px solid #58a6ff}#edu-body{flex:1;overflow-y:auto;padding:16px;color:#c9d1d9;font-size:13px;line-height:1.6}#edu-body::-webkit-scrollbar{width:6px}#edu-body::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}.task-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:10px;cursor:pointer;transition:all .2s}.task-card:hover{border-color:#58a6ff;transform:translateX(4px)}.task-title{font-weight:600;color:#fff;margin-bottom:6px}.task-meta{font-size:11px;color:#8b949e}.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-right:6px}.badge-pend{color:#3fb950;background:rgba(63,185,80,.15)}.badge-exp{color:#f85149;background:rgba(248,81,73,.15)}.answers-box{margin-top:10px;padding:10px;background:#0d1117;border-radius:6px;border:1px solid #30363d;display:none}.answers-box.show{display:block}.ans-item{padding:8px;margin:4px 0;background:#161b22;border-radius:4px;border-left:2px solid #58a6ff;font-size:12px}#chat-area{height:340px;overflow-y:auto;margin-bottom:12px}#chat-area::-webkit-scrollbar{width:6px}#chat-area::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}.msg{margin-bottom:12px;display:flex}.msg.user{justify-content:flex-end}.msg.bot{justify-content:flex-start}.bubble{max-width:85%;padding:10px 14px;border-radius:12px;line-height:1.5;word-wrap:break-word}.msg.user .bubble{background:#238636;color:#fff;border-bottom-right-radius:4px}.msg.bot .bubble{background:#161b22;color:#c9d1d9;border-bottom-left-radius:4px;border:1px solid #30363d}.input-row{display:flex;gap:8px}#chat-input{flex:1;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px 12px;color:#fff;font-size:13px;outline:none}#chat-input:focus{border-color:#58a6ff}#send-btn{background:#238636;border:none;border-radius:8px;padding:10px 16px;color:#fff;font-weight:600;cursor:pointer;transition:all .2s}#send-btn:hover{background:#2ea043}.loading{text-align:center;padding:40px;color:#8b949e}.spinner{display:inline-block;width:20px;height:20px;border:2px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}#status-bar{padding:8px 16px;background:#161b22;border-top:1px solid #30363d;font-size:11px;color:#8b949e;display:flex;justify-content:space-between}.dot{width:6px;height:6px;border-radius:50%;background:#3fb950;display:inline-block;margin-right:4px}';
-
-    var s=document.createElement('style');s.textContent=css;document.head.appendChild(s);
-
-    var d=document.createElement('div');d.id='edu-terminal';
-    d.innerHTML='<div id="edu-header"><h3>🎓 Edu Terminal</h3><div id="edu-btns"><button class="btn-f" onclick="eduRefresh()" title="Atualizar"></button><button class="btn-m" onclick="eduMinimize()" title="Minimizar"></button><button class="btn-r" onclick="eduClose()" title="Fechar"></button></div></div><div id="edu-tabs"><button class="active" onclick="eduTab(\'tasks\')">📋 Atividades</button><button onclick="eduTab(\'chat\')">🤖 Assistente</button></div><div id="edu-body"><div id="tab-tasks"><div class="loading"><div class="spinner"></div><p>Carregando...</p></div></div><div id="tab-chat" style="display:none"><div id="chat-area"><div class="msg bot"><div class="bubble">Olá! 👋 Sou seu assistente. Posso ver suas atividades e ajudar com dúvidas!</div></div></div><div class="input-row"><input type="text" id="chat-input" placeholder="Digite sua mensagem..." onkeypress="if(event.key==\'Enter\')eduSend()"><button id="send-btn" onclick="eduSend()">Enviar</button></div></div></div><div id="status-bar"><span><span class="dot"></span>Online</span><span id="edu-time">--:--</span></div>';
-    document.body.appendChild(d);
-
-    window.eduTasks={pend:[],exp:[]};
-    window.eduChat=[];
-    var min=false;
-
-    // Drag
-    (function(){var h=document.getElementById('edu-header'),el=d,p1=0,p2=0,p3=0,p4=0;h.onmousedown=function(e){e.preventDefault();p3=e.clientX;p4=e.clientY;document.onmouseup=function(){document.onmouseup=null;document.onmousemove=null};document.onmousemove=function(e){e.preventDefault();p1=p3-e.clientX;p2=p4-e.clientY;p3=e.clientX;p4=e.clientY;el.style.top=(el.offsetTop-p2)+'px';el.style.left=(el.offsetLeft-p1)+'px';el.style.right='auto'}}})();
-
-    window.eduClose=function(){d.remove()};
-    window.eduMinimize=function(){var b=document.getElementById('edu-body'),sb=document.getElementById('status-bar');if(min){b.style.display='block';sb.style.display='flex';min=false}else{b.style.display='none';sb.style.display='none';min=true}};
-    window.eduTab=function(t){document.querySelectorAll('#edu-tabs button').forEach(function(b){b.classList.remove('active')});event.target.classList.add('active');document.getElementById('tab-tasks').style.display=t==='tasks'?'block':'none';document.getElementById('tab-chat').style.display=t==='chat'?'block':'none'};
-
-    window.eduRefresh=function(){loadTasks()};
-
-    async function loadTasks(){
-        var token=getToken(),cap=getCaptcha();
-        if(!token){document.getElementById('tab-tasks').innerHTML='<div class="loading"><p>⚠️ Token não encontrado</p><small>Faça login primeiro</small></div>';return;}
-        document.getElementById('tab-tasks').innerHTML='<div class="loading"><div class="spinner"></div><p>Carregando...</p></div>';
-
-        try{
-            var cookies=document.cookie;
-            var roomsRes=await fetch('https://edusp-api.ip.tv/room/user',{headers:{'Authorization':'Bearer '+token,'X-Captcha':cap,'Cookie':cookies}});
-            var roomsData=await roomsRes.json();
-            var targets=[];
-            (roomsData.rooms||[]).forEach(function(r){if(r.name)targets.push(String(r.name));(r.group_categories||[]).forEach(function(g){if(g.id)targets.push(String(g.id))})});
-
-            async function getT(exp){
-                var u='https://edusp-api.ip.tv/tms/task/todo?expired_only='+exp+'&limit=100&offset=0&filter_expired='+(!exp)+'&is_exam=false&with_answer=true&is_essay=false&answer_statuses=draft&answer_statuses=pending&with_apply_moment=true';
-                targets.forEach(function(t){u+='&publication_target='+encodeURIComponent(t)});
-                var r=await fetch(u,{headers:{'Authorization':'Bearer '+token,'X-Captcha':cap,'Cookie':cookies}});
-                var d=await r.json();
-                return Array.isArray(d)?d:(d.results||d.tasks||[]);
-            }
-
-            var [pendData,expData]=await Promise.all([getT(false),getT(true)]);
-            
-            window.eduTasks.pend=pendData.map(function(t){return{id:t.id,title:t.title||'#'+t.id,date:t.expire_at?new Date(t.expire_at).toLocaleString('pt-BR'):'',target:t.publication_target||'',desc:t.description||'',qs:t.questions||[]}});
-            window.eduTasks.exp=expData.map(function(t){return{id:t.id,title:t.title||'#'+t.id,date:t.expire_at?new Date(t.expire_at).toLocaleString('pt-BR'):'',target:t.publication_target||'',desc:t.description||'',qs:t.questions||[]}});
-
-            renderTasks();
-            document.getElementById('edu-time').textContent=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
-        }catch(e){document.getElementById('tab-tasks').innerHTML='<div class="loading"><p>❌ Erro ao carregar</p><small>'+e.message+'</small></div>';}
+/* ===================================================================
+   Internet IA Mini — Widget flutuante injetável (bookmarklet-ready)
+   Script único e autocontido. Pode ser incluído via <script src="...">
+   ou injetado em qualquer página (bookmarklet).
+   =================================================================== */
+(function () {
+    // Evita injeção duplicada: se já existe, apenas alterna a visibilidade
+    if (window.__internetIAMini) {
+        window.__internetIAMini.toggle();
+        return;
     }
 
-    function renderTasks(){
-        var h='';
-        if(window.eduTasks.pend.length===0&&window.eduTasks.exp.length===0){h='<div class="loading"><p>✅ Nenhuma atividade</p></div>'}
-        else{
-            if(window.eduTasks.pend.length>0){h+='<p style="color:#3fb950;margin-bottom:8px;">● Pendentes ('+window.eduTasks.pend.length+')</p>';window.eduTasks.pend.forEach(function(t){h+=taskCard(t,false)})}
-            if(window.eduTasks.exp.length>0){h+='<p style="color:#f85149;margin:16px 0 8px;">● Expiradas ('+window.eduTasks.exp.length+')</p>';window.eduTasks.exp.forEach(function(t){h+=taskCard(t,true)})}
+    const API_CONFIG = {
+        url: 'https://gen.pollinations.ai/v1/chat/completions',
+        key: 'pk_bJav4nbMa2fZGkqG',
+        model: 'openai'
+    };
+
+    const STORAGE_KEY = 'internet_ia_mini_history';
+    const MAX_HISTORY = 20;
+
+    // ===== ESTADO =====
+    const state = {
+        messages: loadHistory(),
+        isOpen: false,
+        isGenerating: false,
+        abortController: null,
+        dragging: false,
+        dragOffset: { x: 0, y: 0 }
+    };
+
+    function loadHistory() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            return raw ? JSON.parse(raw) : [];
+        } catch (e) { return []; }
+    }
+
+    function saveHistory() {
+        try {
+            const trimmed = state.messages.slice(-MAX_HISTORY);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+        } catch (e) {}
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Markdown mínimo: negrito, itálico, código inline, blocos de código e quebras de linha
+    function mdLite(text) {
+        let t = escapeHtml(text);
+        t = t.replace(/```([\s\S]*?)```/g, (m, code) => `<pre>${code.trim()}</pre>`);
+        t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+        t = t.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+        t = t.replace(/\*(.*?)\*/g, '<i>$1</i>');
+        t = t.replace(/\n/g, '<br>');
+        return t;
+    }
+
+    // ===== ESTILOS =====
+    const STYLE_ID = 'internet-ia-mini-style';
+    if (!document.getElementById(STYLE_ID)) {
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = `
+        #iamini-bubble{position:fixed;bottom:20px;right:20px;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#1a1a1a,#3a3a3a);border:1px solid rgba(255,255,255,0.15);box-shadow:0 6px 24px rgba(0,0,0,0.4);cursor:pointer;z-index:2147483000;display:flex;align-items:center;justify-content:center;transition:transform .15s ease}
+        #iamini-bubble:hover{transform:scale(1.06)}
+        #iamini-bubble svg{width:24px;height:24px;color:#fff}
+        #iamini-win{position:fixed;bottom:84px;right:20px;width:320px;height:440px;max-height:70vh;background:#0a0a0a;border:1px solid rgba(255,255,255,0.1);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,0.55);z-index:2147483000;display:none;flex-direction:column;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;color:#fff}
+        #iamini-win.open{display:flex}
+        #iamini-head{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#111;border-bottom:1px solid rgba(255,255,255,0.08);cursor:move;user-select:none}
+        #iamini-head .iamini-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0}
+        #iamini-title{font-size:12.5px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .iamini-headbtn{width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.55);cursor:pointer;flex-shrink:0}
+        .iamini-headbtn:hover{background:rgba(255,255,255,0.08);color:#fff}
+        #iamini-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px;font-size:12.5px;line-height:1.55}
+        #iamini-msgs::-webkit-scrollbar{width:4px}
+        #iamini-msgs::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:8px}
+        .iamini-msg{max-width:88%;padding:8px 11px;border-radius:10px;word-wrap:break-word}
+        .iamini-msg.user{align-self:flex-end;background:#2563eb;color:#fff;border-bottom-right-radius:3px}
+        .iamini-msg.ai{align-self:flex-start;background:#161616;border:1px solid rgba(255,255,255,0.08);border-bottom-left-radius:3px}
+        .iamini-msg pre{background:#000;padding:8px;border-radius:6px;overflow-x:auto;font-size:11px;margin:6px 0}
+        .iamini-msg code{background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:4px;font-size:11px}
+        #iamini-empty{margin:auto;text-align:center;color:rgba(255,255,255,0.35);font-size:12px;padding:20px}
+        #iamini-inputbar{display:flex;gap:6px;padding:8px;border-top:1px solid rgba(255,255,255,0.08);background:#0d0d0d}
+        #iamini-input{flex:1;resize:none;background:#161616;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-size:12.5px;padding:8px 10px;max-height:80px;font-family:inherit;outline:none}
+        #iamini-input:focus{border-color:rgba(255,255,255,0.25)}
+        #iamini-send{width:32px;height:32px;border-radius:8px;background:#fff;color:#000;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer;transition:opacity .15s}
+        #iamini-send:disabled{opacity:0.35;cursor:default}
+        #iamini-send svg{width:15px;height:15px}
+        .iamini-typing{display:flex;gap:3px;padding:8px 11px;align-self:flex-start}
+        .iamini-typing span{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.4);animation:iamini-blink 1s infinite}
+        .iamini-typing span:nth-child(2){animation-delay:.15s}
+        .iamini-typing span:nth-child(3){animation-delay:.3s}
+        @keyframes iamini-blink{0%,100%{opacity:.3}50%{opacity:1}}
+        @media(max-width:420px){#iamini-win{width:92vw;right:4vw;bottom:78px}}
+        `;
+        document.head.appendChild(style);
+    }
+
+    // ===== ESTRUTURA HTML =====
+    const bubble = document.createElement('div');
+    bubble.id = 'iamini-bubble';
+    bubble.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>';
+
+    const win = document.createElement('div');
+    win.id = 'iamini-win';
+    win.innerHTML = `
+        <div id="iamini-head">
+            <span class="iamini-dot"></span>
+            <span id="iamini-title">Internet IA — Mini</span>
+            <span class="iamini-headbtn" id="iamini-clear" title="Limpar conversa">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            </span>
+            <span class="iamini-headbtn" id="iamini-close" title="Fechar">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </span>
+        </div>
+        <div id="iamini-msgs"></div>
+        <div id="iamini-inputbar">
+            <textarea id="iamini-input" placeholder="Pergunte algo..." rows="1"></textarea>
+            <div id="iamini-send">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(bubble);
+    document.body.appendChild(win);
+
+    const $msgs = win.querySelector('#iamini-msgs');
+    const $input = win.querySelector('#iamini-input');
+    const $send = win.querySelector('#iamini-send');
+    const $head = win.querySelector('#iamini-head');
+    const $close = win.querySelector('#iamini-close');
+    const $clear = win.querySelector('#iamini-clear');
+
+    // ===== RENDER =====
+    function render() {
+        if (state.messages.length === 0) {
+            $msgs.innerHTML = '<div id="iamini-empty">👋 Oi! Sou a Internet IA em versão mini.<br>Pergunte qualquer coisa.</div>';
+            return;
         }
-        document.getElementById('tab-tasks').innerHTML=h;
+        $msgs.innerHTML = state.messages.map(m =>
+            `<div class="iamini-msg ${m.role === 'user' ? 'user' : 'ai'}">${mdLite(m.content)}</div>`
+        ).join('');
+        $msgs.scrollTop = $msgs.scrollHeight;
     }
 
-    function taskCard(t,expired){
-        return '<div class="task-card" onclick="eduAnswers(\''+t.id+'\',\''+(t.target||'')+'\')"><div class="task-title">'+t.title+'</div><div class="task-meta"><span class="badge '+(expired?'badge-exp':'badge-pend')+'">'+(expired?'EXPIRADA':'PENDENTE')+'</span>📅 '+t.date+'</div><div class="answers-box" id="ans-'+t.id+'"></div></div>'
+    function showTyping() {
+        const el = document.createElement('div');
+        el.className = 'iamini-typing';
+        el.id = 'iamini-typing';
+        el.innerHTML = '<span></span><span></span><span></span>';
+        $msgs.appendChild(el);
+        $msgs.scrollTop = $msgs.scrollHeight;
+    }
+    function hideTyping() {
+        const el = document.getElementById('iamini-typing');
+        if (el) el.remove();
     }
 
-    window.eduAnswers=function(id,target){
-        var box=document.getElementById('ans-'+id);
-        if(box.classList.contains('show')){box.classList.remove('show');box.innerHTML='';return}
-        box.classList.add('show');
-        box.innerHTML='<div class="loading"><div class="spinner"></div></div>';
+    // ===== ENVIO DE MENSAGEM =====
+    async function sendMessage() {
+        const text = $input.value.trim();
+        if (!text || state.isGenerating) return;
+        state.messages.push({ role: 'user', content: text });
+        $input.value = '';
+        autoGrow();
+        render();
+        saveHistory();
 
-        fetch('https://edusp-api.ip.tv/tms/task/'+id+'/answers?room_code='+encodeURIComponent(target),{headers:{'Authorization':'Bearer '+getToken(),'Cookie':document.cookie}})
-        .then(function(r){return r.json()})
-        .then(function(d){
-            var ans=d.answers||d.results||d;
-            if(!ans||ans.length===0){box.innerHTML='<p style="color:#8b949e;text-align:center">Sem respostas</p>';return}
-            var h='';ans.forEach(function(a,i){h+='<div class="ans-item"><strong>Q'+(i+1)+': </strong>'+((typeof a==='object')?(a.answer_text||JSON.stringify(a)):a)+'</div>'});
-            box.innerHTML=h;
-        })
-        .catch(function(e){box.innerHTML='<p style="color:#f85149">Erro: '+e.message+'</p>'})
-    };
+        state.isGenerating = true;
+        $send.style.pointerEvents = 'none';
+        showTyping();
 
-    // Chat
-    window.eduSend=async function(){
-        var input=document.getElementById('chat-input');
-        var msg=input.value.trim();
-        if(!msg)return;
-
-        addMsg(msg,'user');
-        input.value='';
-
-        var typing=document.createElement('div');
-        typing.className='msg bot';
-        typing.id='typing';
-        typing.innerHTML='<div class="bubble"><div class="spinner" style="display:inline-block;vertical-align:middle;margin-right:8px"></div>Digitando...</div>';
-        document.getElementById('chat-area').appendChild(typing);
-        scrollChat();
-
-        try{
-            var ctx='Tarefas:\nPENDENTES:\n'+window.eduTasks.pend.map(function(t){return '- ['+t.id+'] '+t.title}).join('\n')+'\n\nEXPIRADAS:\n'+window.eduTasks.exp.map(function(t){return '- ['+t.id+'] '+t.title}).join('\n');
-
-            var res=await fetch(API_AI,{
-                method:'POST',
-                headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},
-                body:JSON.stringify({
-                    model:'openai',
-                    messages:[
-                        {role:'system',content:'Você é assistente educacional. Use estas tarefas para ajudar:\n'+ctx+'\nResponda em pt-BR, seja útil e conciso.'},
-                        ...window.eduChat.slice(-8),
-                        {role:'user',content:msg}
+        try {
+            state.abortController = new AbortController();
+            const res = await fetch(API_CONFIG.url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${API_CONFIG.key}`
+                },
+                body: JSON.stringify({
+                    model: API_CONFIG.model,
+                    messages: [
+                        { role: 'system', content: 'Você é a Internet IA, um assistente rápido, direto e útil. Responda sempre em português brasileiro, com respostas curtas e objetivas — esta é a versão mini em janela flutuante.' },
+                        ...state.messages.map(m => ({ role: m.role, content: m.content }))
                     ],
-                    temperature:0.7,
-                    max_tokens:1500
-                })
+                    stream: true
+                }),
+                signal: state.abortController.signal
             });
+            if (!res.ok) throw new Error('Erro na API: ' + res.status);
 
-            var data=await res.json();
-            var reply=data.choices[0].message.content;
-            addMsg(reply,'bot');
-            window.eduChat.push({role:'user',content:msg},{role:'assistant',content:reply});
-        }catch(e){addMsg('Erro: '+e.message,'bot')}
-        
-        var t=document.getElementById('typing');if(t)t.remove();
-    };
+            hideTyping();
+            const aiMsg = { role: 'assistant', content: '' };
+            state.messages.push(aiMsg);
 
-    function addMsg(text,role){
-        var div=document.createElement('div');
-        div.className='msg '+role;
-        div.innerHTML='<div class="bubble">'+text.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>')+'</div>';
-        document.getElementById('chat-area').appendChild(div);
-        scrollChat();
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed.startsWith('data:')) continue;
+                    const payload = trimmed.slice(5).trim();
+                    if (payload === '[DONE]') continue;
+                    try {
+                        const json = JSON.parse(payload);
+                        const delta = json.choices?.[0]?.delta?.content;
+                        if (delta) {
+                            aiMsg.content += delta;
+                            render();
+                        }
+                    } catch (e) {}
+                }
+            }
+            saveHistory();
+        } catch (e) {
+            hideTyping();
+            if (e.name !== 'AbortError') {
+                state.messages.push({ role: 'assistant', content: '⚠️ Erro ao gerar resposta. Tente novamente.' });
+                render();
+            }
+        } finally {
+            state.isGenerating = false;
+            $send.style.pointerEvents = '';
+        }
     }
-    
-    function scrollChat(){var a=document.getElementById('chat-area');a.scrollTop=a.scrollHeight}
 
-    // Auto refresh
-    var lastURL=location.href;
-    setInterval(function(){if(location.href!==lastURL){lastURL=location.href;loadTasks()}},5000);
+    function autoGrow() {
+        $input.style.height = 'auto';
+        $input.style.height = Math.min($input.scrollHeight, 80) + 'px';
+    }
 
-    loadTasks();
+    // ===== EVENTOS =====
+    $input.addEventListener('input', autoGrow);
+    $input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+    $send.addEventListener('click', sendMessage);
+    $close.addEventListener('click', () => api.toggle(false));
+    $clear.addEventListener('click', () => {
+        if (confirm('Limpar a conversa mini?')) {
+            state.messages = [];
+            saveHistory();
+            render();
+        }
+    });
+    bubble.addEventListener('click', () => api.toggle());
+
+    // Arrastar a janela pelo cabeçalho
+    $head.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.iamini-headbtn')) return;
+        state.dragging = true;
+        const rect = win.getBoundingClientRect();
+        state.dragOffset.x = e.clientX - rect.left;
+        state.dragOffset.y = e.clientY - rect.top;
+        win.style.transition = 'none';
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (!state.dragging) return;
+        const x = e.clientX - state.dragOffset.x;
+        const y = e.clientY - state.dragOffset.y;
+        win.style.left = Math.max(4, Math.min(window.innerWidth - win.offsetWidth - 4, x)) + 'px';
+        win.style.top = Math.max(4, Math.min(window.innerHeight - win.offsetHeight - 4, y)) + 'px';
+        win.style.right = 'auto';
+        win.style.bottom = 'auto';
+    });
+    document.addEventListener('mouseup', () => { state.dragging = false; });
+
+    // ===== API PÚBLICA =====
+    const api = {
+        toggle(force) {
+            state.isOpen = typeof force === 'boolean' ? force : !state.isOpen;
+            win.classList.toggle('open', state.isOpen);
+            if (state.isOpen) $input.focus();
+        },
+        destroy() {
+            bubble.remove();
+            win.remove();
+            const styleEl = document.getElementById(STYLE_ID);
+            if (styleEl) styleEl.remove();
+            delete window.__internetIAMini;
+        }
+    };
+    window.__internetIAMini = api;
+
+    render();
 })();
